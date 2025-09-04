@@ -265,7 +265,6 @@ where
         debug!("Decrypting entire block data with eager decryption");
         
         // Extract encrypted blobs from the inner block
-        // Why does decrypt_block need to extract encrypted blobs? It feels weird that get_block_at_height() calls decrypt_block() which calls extract_relevant_blobs()
         let encrypted_blobs = self.inner().extract_relevant_blobs(&inner_block);
         
         // Decrypt all blob data upfront (eager decryption)
