@@ -1,6 +1,21 @@
 use std::fmt::Display;
 
 use async_trait::async_trait;
+
+// Simple error type for blob transformation that satisfies the trait bounds
+#[cfg(feature = "native")]
+#[derive(Debug)]
+struct TransformError(String);
+
+#[cfg(feature = "native")]
+impl std::fmt::Display for TransformError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[cfg(feature = "native")]
+impl std::error::Error for TransformError {}
 use sov_rollup_interface::da::{
     BlobReaderTrait, DaSpec, RelevantBlobs, RelevantProofs, 
 };
@@ -28,6 +43,7 @@ impl<T> DaService for EncryptedDaService<T>
 where
     T: DaService + Clone + Send + Sync + 'static,
     T::Error: Send + Sync + Display,
+    <<T as DaService>::Spec as DaSpec>::BlobTransaction: BlobReaderTrait,
 {
     type Spec = T::Spec;
     type Config = EncryptedDaConfig<T::Config>;
@@ -46,14 +62,13 @@ where
             .await
             .map_err(|e| anyhow::anyhow!("Inner DA service error: {}", e))?;
 
-        // Decrypt the block's blobs using the async method
-        tracing::info!("=== DECRYPTING BLOCK ===");
-        tracing::info!("Decrypting block at height {}", height);
-        let decrypted_block = self.decrypt_block(inner_block).await?;
+        // Just wrap the block without eager decryption - decryption will happen lazily
+        // when extract_relevant_blobs() is called
+        tracing::info!("Retrieved block at height {} - will decrypt lazily when blobs are extracted", height);
+        let wrapped_block = EncryptedFilteredBlock::new(inner_block, self.encryption().clone()).await?;
         
-        tracing::info!("=== BLOCK DECRYPTION COMPLETE ===");
-        debug!("Successfully retrieved and decrypted block at height {}", height);
-        Ok(decrypted_block)
+        debug!("Successfully retrieved block at height {}", height);
+        Ok(wrapped_block)
     }
 
     async fn get_block_header_at(
@@ -98,24 +113,90 @@ where
         block: &Self::FilteredBlock,
     ) -> RelevantBlobs<<Self::Spec as DaSpec>::BlobTransaction> {
         
-        // Get the encrypted blobs from the inner DA service for metadata (address, hash)
-        let inner_blobs = self.inner().extract_relevant_blobs(block.inner());
+        // Extract blobs from the inner block - these contain encrypted data
+        let mut inner_blobs = self.inner().extract_relevant_blobs(block.inner());
         
-        tracing::info!("Extracted {} batch blobs and {} proof blobs", 
-                      inner_blobs.batch_blobs.len(), 
-                      inner_blobs.proof_blobs.len());
+        tracing::info!("=== LAZY DECRYPTION ===");
         
-        // For now, return the encrypted blobs - the real decryption should happen 
-        // when the blobs are accessed. This is a limitation of the current design
-        // where we can't easily replace blob data without knowing the concrete type.
-        //
-        // The proper solution would be to modify the BlobReaderTrait to allow 
-        // mutable access to the underlying data, or create a new trait for 
-        // decrypted blobs. For MockDA, we'd need to detect MockBlob specifically.
-        //
-        // As a temporary workaround, let's just return the original blobs.
-        // Tests that need decrypted data should use the EncryptedFilteredBlock
-        // methods directly: get_decrypted_batch_blobs() and get_decrypted_proof_blobs()
+        // Calculate lengths before mutable iteration to avoid borrowing conflicts
+        let batch_blobs_count = inner_blobs.batch_blobs.len();
+        let proof_blobs_count = inner_blobs.proof_blobs.len();
+        
+        tracing::info!("Extracting {} batch blobs and {} proof blobs - decrypting on demand", 
+                      batch_blobs_count, proof_blobs_count);
+        
+        // Decrypt batch blobs lazily using tokio::runtime::Handle::current()
+        for (i, blob) in inner_blobs.batch_blobs.iter_mut().enumerate() {
+            tracing::info!("Starting lazy decryption of batch blob {} of {}", i + 1, batch_blobs_count);
+            let original_data_len = blob.total_len();
+            tracing::info!("Original blob size: {} bytes", original_data_len);
+            
+            #[cfg(feature = "native")]
+            {
+                use sov_rollup_interface::da::BlobReaderTrait as _;
+                let encryption = self.encryption().clone();
+                let decrypt_result = blob.with_transformed_data(|encrypted_data| -> Result<Vec<u8>, TransformError> {
+                    tracing::info!("About to decrypt {} bytes of data", encrypted_data.len());
+                    // Use futures executor to run async decryption in sync context
+                    // This works better than tokio's block_on when already in an async context
+                    let result = futures::executor::block_on(async {
+                        encryption.decrypt(encrypted_data).await
+                            .map_err(|e| TransformError(format!("Lazy decryption failed: {}", e)))
+                    });
+                    tracing::info!("Decryption result: {:?}", result.as_ref().map(|d| d.len()).map_err(|e| e.to_string()));
+                    result
+                });
+                
+                match decrypt_result {
+                    Ok(()) => {
+                        let new_data_len = blob.total_len();
+                        tracing::info!("Successfully decrypted batch blob {} - size changed from {} to {} bytes", i, original_data_len, new_data_len);
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to decrypt batch blob {} lazily: {}", i, e);
+                    }
+                }
+            }
+            
+            #[cfg(not(feature = "native"))]
+            {
+                tracing::warn!("Native feature not enabled - skipping decryption");
+                // Suppress unused variable warning when native feature is not enabled
+                let _ = blob;
+            }
+        }
+        
+        // Decrypt proof blobs lazily
+        for (i, blob) in inner_blobs.proof_blobs.iter_mut().enumerate() {
+            tracing::debug!("Decrypting proof blob {} on demand", i + 1);
+            
+            #[cfg(feature = "native")]
+            {
+                use sov_rollup_interface::da::BlobReaderTrait as _;
+                let encryption = self.encryption().clone();
+                let decrypt_result = blob.with_transformed_data(|encrypted_data| -> Result<Vec<u8>, TransformError> {
+                    // Use futures executor to run async decryption in sync context
+                    // This works better than tokio's block_on when already in an async context
+                    futures::executor::block_on(async {
+                        encryption.decrypt(encrypted_data).await
+                            .map_err(|e| TransformError(format!("Lazy decryption failed: {}", e)))
+                    })
+                });
+                
+                if let Err(e) = decrypt_result {
+                    tracing::warn!("Failed to decrypt proof blob {} lazily: {}", i, e);
+                }
+            }
+            
+            #[cfg(not(feature = "native"))]
+            {
+                // Suppress unused variable warning when native feature is not enabled
+                let _ = blob;
+            }
+        }
+        
+        tracing::info!("=== LAZY DECRYPTION COMPLETE ===");
+        tracing::info!("Successfully extracted blobs with lazily decrypted data");
         inner_blobs
     }
 
@@ -256,67 +337,3 @@ where
     }
 }
 
-impl<T> EncryptedDaService<T>
-where
-    T: DaService,
-{
-    /// Decrypt all blob data in a block
-    pub(crate) async fn decrypt_block(&self, inner_block: T::FilteredBlock) -> Result<EncryptedFilteredBlock<T::FilteredBlock>, anyhow::Error> {
-        debug!("Decrypting entire block data with eager decryption");
-        
-        // Extract encrypted blobs from the inner block
-        let encrypted_blobs = self.inner().extract_relevant_blobs(&inner_block);
-        
-        // Decrypt all blob data upfront (eager decryption)
-        let mut decrypted_batch_blobs = Vec::new();
-        let mut decrypted_proof_blobs = Vec::new();
-        
-        // Decrypt batch blobs
-        let batch_blobs_count = encrypted_blobs.batch_blobs.len();
-        for (i, mut blob) in encrypted_blobs.batch_blobs.into_iter().enumerate() {
-            tracing::info!("Decrypting batch blob {} of {}", i + 1, batch_blobs_count);
-            let encrypted_data = blob.full_data();
-            tracing::info!("Encrypted batch blob size: {} bytes", encrypted_data.len());
-            
-            match self.encryption().decrypt(encrypted_data).await {
-                Ok(decrypted_data) => {
-                    tracing::info!("Decrypted batch blob from {} to {} bytes", encrypted_data.len(), decrypted_data.len());
-                    decrypted_batch_blobs.push(decrypted_data);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to decrypt batch blob {}: {}", i, e);
-                    // Keep original data if decryption fails (might not be encrypted)
-                    decrypted_batch_blobs.push(encrypted_data.to_vec());
-                }
-            }
-        }
-        
-        // Decrypt proof blobs
-        let proof_blobs_count = encrypted_blobs.proof_blobs.len();
-        for (i, mut blob) in encrypted_blobs.proof_blobs.into_iter().enumerate() {
-            tracing::info!("Decrypting proof blob {} of {}", i + 1, proof_blobs_count);
-            let encrypted_data = blob.full_data();
-            tracing::info!("Encrypted proof blob size: {} bytes", encrypted_data.len());
-            
-            match self.encryption().decrypt(encrypted_data).await {
-                Ok(decrypted_data) => {
-                    tracing::info!("Decrypted proof blob from {} to {} bytes", encrypted_data.len(), decrypted_data.len());
-                    decrypted_proof_blobs.push(decrypted_data);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to decrypt proof blob {}: {}", i, e);
-                    // Keep original data if decryption fails (might not be encrypted)
-                    decrypted_proof_blobs.push(encrypted_data.to_vec());
-                }
-            }
-        }
-        
-        // Create the encrypted filtered block with pre-decrypted blob data
-        EncryptedFilteredBlock::new_with_decrypted_blobs(
-            inner_block, 
-            self.encryption().clone(),
-            decrypted_batch_blobs,
-            decrypted_proof_blobs,
-        ).await
-    }
-}

@@ -60,7 +60,6 @@ tokio = { workspace = true, features = ["sync", "macros", "rt-multi-thread"] }
 native = [
     "backon",
     "futures",
-    "sov-rollup-interface/native",
     "tracing",
     "tokio",
     "rockbound"
@@ -69,7 +68,6 @@ arbitrary = [
 	"dep:arbitrary",
 	"proptest",
 	"proptest-derive",
-	"sov-rollup-interface/arbitrary",
 	"dep:sha2",
 	"rockbound/arbitrary"
 ]

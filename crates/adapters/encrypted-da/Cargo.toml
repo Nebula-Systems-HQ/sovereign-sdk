@@ -9,19 +9,20 @@ repository.workspace = true
 publish.workspace = true
 
 [features]
-default = ["aes-encryption"]
+default = ["aes-encryption", "native"]
+native = ["sov-rollup-interface/native"]
 aes-encryption = ["sov-encryption/aes-encryption"]
 mock-da = ["dep:sov-mock-da"]
 
 [dependencies]
 # Core dependencies
-sov-rollup-interface = { git = "ssh://git@github.com/Sovereign-Labs/sovereign-sdk.git", rev = "4671d116445263ba2e886056294b9eedb9779ba1", features = ["native"] }
+sov-rollup-interface = { path = "../../rollup-interface", features = ["native"] }
 sov-encryption = { path = "../../utils/sov-encryption" }
 
 # Async and utilities
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "rt-multi-thread"] }
-futures = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 
 # Serialization
 serde = { workspace = true, features = ["derive"] }
@@ -43,11 +44,11 @@ tracing = { workspace = true }
 schemars = { workspace = true, features = ["derive"] }
 
 # Optional dependencies for features
-sov-mock-da = { git = "ssh://git@github.com/Sovereign-Labs/sovereign-sdk.git", rev = "4671d116445263ba2e886056294b9eedb9779ba1", optional = true, features = ["native"] }
+sov-mock-da = { path = "../mock-da", optional = true, features = ["native"] }
 
 [dev-dependencies]
-sov-mock-da = { git = "ssh://git@github.com/Sovereign-Labs/sovereign-sdk.git", rev = "4671d116445263ba2e886056294b9eedb9779ba1", features = ["native"] }
-sov-celestia-adapter = { git = "ssh://git@github.com/Sovereign-Labs/sovereign-sdk.git", rev = "4671d116445263ba2e886056294b9eedb9779ba1", features = ["native"] }
+sov-mock-da = { path = "../mock-da", features = ["native"] }
+sov-celestia-adapter = { path = "../celestia", features = ["native"] }
 tokio-test = "0.4"
 tempfile = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }

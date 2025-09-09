@@ -160,17 +160,18 @@ async fn test_get_block_at_decrypts_data_mock_da() {
     
     println!("2. Read block using encrypted-da service");
     
-    // Get decrypted data directly from the EncryptedFilteredBlock
-    let decrypted_batch_blobs = decrypted_block.get_decrypted_batch_blobs();
+    // Extract relevant blobs - this will trigger lazy decryption
+    let decrypted_blobs = encrypted_da.extract_relevant_blobs(&decrypted_block);
     
-    if !decrypted_batch_blobs.is_empty() {
-        let decrypted_data = &decrypted_batch_blobs[0];
+    if !decrypted_blobs.batch_blobs.is_empty() {
+        let mut decrypted_blob = decrypted_blobs.batch_blobs.into_iter().next().unwrap();
+        let decrypted_data = decrypted_blob.full_data();
         
         if !decrypted_data.is_empty() {
             // Step 3: Verify that the read data == known plaintext
             println!("3. Extracted decrypted data: {} bytes", decrypted_data.len());
             
-            assert_eq!(decrypted_data.as_slice(), fixture.known_plaintext.as_slice(),
+            assert_eq!(decrypted_data, fixture.known_plaintext.as_slice(),
                       "Decrypted data should match original known plaintext");
             
             println!("   ✓ VERIFICATION PASSED: Decrypted data == Known plaintext");
