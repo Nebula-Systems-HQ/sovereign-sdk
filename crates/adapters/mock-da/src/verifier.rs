@@ -30,6 +30,16 @@ impl BlobReaderTrait for MockBlob {
         self.blob.advance(num_bytes);
         self.verified_data()
     }
+
+    #[cfg(feature = "native")]
+    fn replace_internal_data(&mut self, new_data: Vec<u8>) {
+        // Replace the internal CountedBufReader with new data
+        // This preserves the blob's metadata (address, hash) while updating the data
+        use sov_rollup_interface::Bytes;
+        use sov_rollup_interface::da::CountedBufReader;
+        
+        self.blob = CountedBufReader::new(Bytes::from(new_data));
+    }
 }
 
 /// A [`sov_rollup_interface::da::DaSpec`] suitable for testing.

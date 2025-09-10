@@ -189,6 +189,42 @@ pub trait BlobReaderTrait: Serialize + DeserializeOwned + Send + Sync + 'static 
     fn full_data(&mut self) -> &[u8] {
         self.advance(self.total_len() - self.verified_data().len())
     }
+
+    /// Transform the underlying data using a provided function.
+    /// This enables data transformations like encryption/decryption, compression, format conversion, etc.
+    /// 
+    /// The default implementation attempts to apply the transformation and replace the internal data.
+    /// Blob types that don't support data replacement will use the default no-op `replace_internal_data`.
+    #[cfg(feature = "native")]
+    fn with_transformed_data<F, E>(&mut self, transformer: F) -> Result<(), E>
+    where 
+        F: FnOnce(&[u8]) -> Result<Vec<u8>, E>,
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        // Get all the current data
+        let current_data = self.full_data().to_vec();
+        
+        // Apply the transformation
+        let transformed_data = transformer(&current_data)?;
+        
+        // Try to replace the internal data (will be no-op for blobs that don't support it)
+        self.replace_internal_data(transformed_data);
+        
+        Ok(())
+    }
+
+    /// Replace the underlying blob data while preserving metadata (sender, hash, etc.).
+    /// 
+    /// This method allows blob implementations to replace their internal data buffer
+    /// with transformed data while maintaining their identity and metadata.
+    /// 
+    /// The default implementation is a no-op for backwards compatibility.
+    /// Blob types that support data replacement should override this method.
+    #[cfg(feature = "native")]
+    fn replace_internal_data(&mut self, _new_data: Vec<u8>) {
+        // Default: no-op for blobs that don't support data replacement
+        // This ensures backwards compatibility for existing blob implementations
+    }
 }
 
 /// Trait with a collection of trait bounds for a block hash.
