@@ -27,7 +27,6 @@ use tracing::debug;
 use crate::config::EncryptedDaConfig;
 use crate::filtered_block::EncryptedFilteredBlock;
 use crate::encrypted_service::EncryptedDaService;
-use crate::encrypted_verifier::EncryptedDaVerifier;
 
 /// Implementation of the DaService trait for the EncryptedDaService<T> wrapper
 /// 
@@ -48,7 +47,7 @@ where
 {
     type Spec = T::Spec;
     type Config = EncryptedDaConfig<T::Config>;
-    type Verifier = EncryptedDaVerifier<T::Verifier>;
+    type Verifier = T::Verifier;
     type FilteredBlock = EncryptedFilteredBlock<T::FilteredBlock>;
     type Error = anyhow::Error;
 
