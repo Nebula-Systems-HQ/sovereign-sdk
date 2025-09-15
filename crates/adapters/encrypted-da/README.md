@@ -1,22 +1,12 @@
 # Encrypted DA Adapter
 
-A generic encryption wrapper for Sovereign SDK DA services that provides transparent encryption/decryption of data stored on Data Availability layers. 
+A generic encryption wrapper for DA services that provides transparent encryption/decryption of data stored on Data Availability layers. 
 
 The wrapper implements the same `DaService` trait as the inner service, making it a drop-in replacement.
 
 ## Overview
 
 The `sov-encrypted-da` crate provides `EncryptedDaService<T>`, a wrapper that adds encryption capabilities to any DA service implementing the `DaService` trait. This allows you to encrypt data before it's submitted to the DA layer and decrypt it when reading, while maintaining full compatibility with existing rollup code.
-
-# TODO CHANGE THIS
-## Key Features
-
-- **🔐 Transparent Encryption**: Encrypts data before DA submission, decrypts on retrieval
-- **🔄 Universal Compatibility**: Works with any DA service (MockDA, Celestia, Avail, etc.)
-- **🛡️ Unix Socket Key Management**: Secure key fetching via Unix domain sockets  
-- **⚙️ Configuration-Driven**: Enable/disable encryption without code changes
-- **🧪 Testable**: Mock encryption layers for testing
-- **🚀 Zero Breaking Changes**: Existing code works unchanged
 
 ## Usage
 
