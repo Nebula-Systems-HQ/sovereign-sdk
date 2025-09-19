@@ -26,6 +26,7 @@ members = [
     "crates/utils/sov-zkvm-utils",
     "crates/utils/sov-build",
     "crates/utils/sov-eip-712",
+    "crates/utils/sov-encryption",
     # Module System
     "crates/module-system/sov-cli",
     "crates/module-system/sov-modules-stf-blueprint",

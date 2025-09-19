@@ -10840,7 +10840,7 @@ dependencies = [
  "bytes",
  "hex",
  "rand 0.8.5",
- "schemars 0.8.21",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
