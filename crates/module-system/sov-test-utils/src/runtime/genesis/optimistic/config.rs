@@ -278,7 +278,7 @@ impl<S: Spec> MinimalOptimisticGenesisConfig<S> {
                     },
                 },
                 uniqueness: (),
-                blob_storage: (),
+                blob_storage: sov_blob_storage::BlobStorageConfig {},
                 chain_state: BasicGenesisConfig::chain_state(
                     sov_modules_api::OperatingMode::Optimistic,
                     inner_code_commitment,

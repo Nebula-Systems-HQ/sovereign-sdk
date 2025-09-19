@@ -15,6 +15,7 @@ workspace = true
 
 [dependencies]
 sov-rollup-interface = { workspace = true }
+sov-encryption = {workspace = true}
 sov-db = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }

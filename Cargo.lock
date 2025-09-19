@@ -3792,6 +3792,7 @@ dependencies = [
  "schemars",
  "serde",
  "sov-db",
+ "sov-encryption",
  "sov-metrics",
  "sov-mock-da",
  "sov-modules-api",
