@@ -495,6 +495,7 @@ where
                 blob_processing_timeout_secs: self.config.blob_processing_timeout_secs,
                 batch_encryption: None,
             },
+            stf: Default::default(),
 
             monitoring: MonitoringConfig {
                 telegraf_address: self.config.telegraf_address,
