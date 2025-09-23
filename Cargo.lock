@@ -11297,6 +11297,7 @@ dependencies = [
  "jsonrpsee",
  "schemars",
  "serde",
+ "sov-encryption",
  "sov-metrics",
  "sov-modules-api",
  "sov-rollup-interface",

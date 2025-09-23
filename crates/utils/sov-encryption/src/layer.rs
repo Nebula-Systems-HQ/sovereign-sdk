@@ -456,3 +456,18 @@ impl EncryptionLayer {
         Ok(())
     }
 }
+
+impl EncryptionLayerTrait for EncryptionLayer {
+    fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+        // Use the first value from the tuple returned by the encrypt method
+        self.encrypt(plaintext).map(|(encrypted, _key_id)| encrypted)
+    }
+
+    fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, EncryptionError> {
+        self.decrypt(ciphertext, None)
+    }
+
+    fn encryption_type(&self) -> &'static str {
+        "AES-256-GCM"
+    }
+}

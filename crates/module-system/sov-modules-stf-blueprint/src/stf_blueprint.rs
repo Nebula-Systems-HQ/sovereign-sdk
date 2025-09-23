@@ -14,6 +14,7 @@ pub struct StfBlueprint<S: Spec, RT: Runtime<S>> {
     #[cfg_attr(not(feature = "test-utils"), allow(dead_code))]
     pub(crate) runtime: RT,
     /// Optional encryption layer for decrypting transactions
+    #[allow(dead_code)]
     pub(crate) encryption_layer: Option<Box<dyn sov_encryption::EncryptionLayerTrait + Send + Sync>>,
     phantom_context: PhantomData<S>,
 }
