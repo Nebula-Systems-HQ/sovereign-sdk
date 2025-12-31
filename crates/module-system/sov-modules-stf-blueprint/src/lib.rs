@@ -274,7 +274,11 @@ where
         genesis_rollup_header: &<S::Da as DaSpec>::BlockHeader,
         pre_state: Self::PreState,
         params: Self::GenesisParams,
-    ) -> (Self::StateRoot, Self::ChangeSet) {
+    ) -> (
+        Self::StateRoot,
+        Self::ChangeSet,
+        Option<sov_rollup_interface::stf::BatchReceipt<Self::BatchReceiptContents, Self::TxReceiptContents>>,
+    ) {
         let mut runtime = RT::default();
         // Sanity checks.
         assert!(<S as GasSpec>::process_tx_pre_exec_checks_gas()
@@ -293,6 +297,12 @@ where
             panic!("Runtime initialization must succeed {e}");
         }
 
+        // Extract genesis events and create receipts if any events were emitted
+        #[cfg(feature = "native")]
+        let genesis_events = genesis_accessor.take_events();
+        #[cfg(not(feature = "native"))]
+        let genesis_events = Vec::new();
+
         #[cfg(feature = "native")]
         let (genesis_hash, _, change_set) = self.materialize_slot(
             &mut runtime,
@@ -307,7 +317,34 @@ where
             <S::Storage as Storage>::PRE_GENESIS_ROOT,
         );
 
-        (genesis_hash, change_set)
+        // Create genesis batch receipt if events were emitted
+        let genesis_batch = if !genesis_events.is_empty() {
+            use crate::stf_blueprint::{convert_genesis_events_to_stored, create_genesis_batch_receipt, create_genesis_transaction_receipt};
+            
+            let stored_events = convert_genesis_events_to_stored::<S, RT>(genesis_events);
+            let genesis_tx_receipt = create_genesis_transaction_receipt::<S>(stored_events);
+            
+            // Use zero values for genesis DA address and gas price since there's no sequencer at genesis
+            // Create a zero address by trying to convert from all zeros
+            let zero_bytes = vec![0u8; 32];
+            let genesis_da_address = <<S as Spec>::Da as DaSpec>::Address::try_from(zero_bytes.as_slice())
+                .unwrap_or_else(|_| {
+                    // If conversion fails, try with a smaller size (some addresses might be shorter)
+                    <<S as Spec>::Da as DaSpec>::Address::try_from(&[0u8; 28])
+                        .unwrap_or_else(|_| panic!("Unable to create zero DA address for genesis"))
+                });
+            let gas_price = <S::Gas as Gas>::Price::ZEROED;
+            
+            Some(create_genesis_batch_receipt::<S>(
+                genesis_tx_receipt,
+                genesis_da_address,
+                gas_price,
+            ))
+        } else {
+            None
+        };
+
+        (genesis_hash, change_set, genesis_batch)
     }
 
     /// Run a state transition using the STF blueprint.

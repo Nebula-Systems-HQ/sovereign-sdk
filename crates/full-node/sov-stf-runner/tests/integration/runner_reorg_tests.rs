@@ -382,7 +382,7 @@ fn get_result_from_blocks(
 
     let stf = HashStf::new();
 
-    let (genesis_state_root, change_set) =
+    let (genesis_state_root, change_set, _genesis_batch) =
         <HashStf as StateTransitionFunction<MockZkvm, MockZkvm, MockDaSpec>>::init_chain(
             &stf,
             &Default::default(),

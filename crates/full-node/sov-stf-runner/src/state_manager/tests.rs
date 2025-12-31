@@ -53,8 +53,12 @@ impl<InnerVm: Zkvm, OuterVm: Zkvm, Da: DaSpec> StateTransitionFunction<InnerVm, 
         _genesis_rollup_header: &Da::BlockHeader,
         _base_state: Self::PreState,
         _params: Self::GenesisParams,
-    ) -> (Self::StateRoot, ()) {
-        (<ProverStorage<S> as Storage>::PRE_GENESIS_ROOT, ())
+    ) -> (
+        Self::StateRoot,
+        (),
+        Option<sov_rollup_interface::stf::BatchReceipt<Self::BatchReceiptContents, Self::TxReceiptContents>>,
+    ) {
+        (<ProverStorage<S> as Storage>::PRE_GENESIS_ROOT, (), None)
     }
 
     fn apply_slot(

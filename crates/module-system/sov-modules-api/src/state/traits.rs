@@ -156,7 +156,7 @@ pub trait PerBlockCache {
 /// The state accessor used during genesis. It provides unrestricted
 /// access to [`User`] and `Kernel` state, as well as limited visibility into [`Accessory`] state.  
 pub trait GenesisState<S: Spec>:
-    TxState<S> + PrivilegedKernelAccessor<Error = <Self as StateReader<User>>::Error>
+    TxState<S> + PrivilegedKernelAccessor<Error = <Self as StateReader<User>>::Error> + EventContainer
 {
 }
 

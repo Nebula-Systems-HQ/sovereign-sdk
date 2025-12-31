@@ -105,11 +105,17 @@ where
     let (stf_state, ledger_state) = storage_manager.create_state_for(&block_header)?;
     let ledger_db = LedgerDb::with_reader(ledger_state)?;
 
-    let (genesis_state_root, initialized_storage) =
+    let (genesis_state_root, initialized_storage, genesis_batch_opt) =
         stf.init_chain(&block_header, stf_state, genesis_params);
 
-    let data_to_commit: SlotCommit<_, Stf::BatchReceiptContents, Stf::TxReceiptContents> =
+    let mut data_to_commit: SlotCommit<_, Stf::BatchReceiptContents, Stf::TxReceiptContents> =
         SlotCommit::new(genesis_block, Vec::default());
+    
+    // Add genesis batch if it exists (contains genesis events)
+    if let Some(genesis_batch) = genesis_batch_opt {
+        data_to_commit.add_batch(genesis_batch);
+    }
+    
     let mut ledger_change_set =
         ledger_db.materialize_slot(data_to_commit, genesis_state_root.as_ref())?;
 

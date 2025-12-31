@@ -483,7 +483,7 @@ where
             &RT::default().kernel(),
         ));
 
-        let (state_root, change_set) =
+        let (state_root, change_set, _genesis_batch) =
             stf.init_chain(&Default::default(), stf_state, genesis_config);
 
         storage_manager.commit_change_set(change_set, state_root.clone());

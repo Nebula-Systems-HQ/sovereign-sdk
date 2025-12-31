@@ -131,3 +131,74 @@ where
 {
     Vec::new() // Return an empty vector
 }
+
+// Special hash values for genesis (all zeros to distinguish from real transactions)
+const GENESIS_TX_HASH: [u8; 32] = [0u8; 32];
+const GENESIS_BATCH_HASH: [u8; 32] = [0u8; 32];
+
+/// Convert genesis events from TypeErasedEvent to StoredEvent format
+#[cfg(feature = "native")]
+pub(crate) fn convert_genesis_events_to_stored<S, RT>(
+    genesis_events: Vec<sov_modules_api::TypeErasedEvent>,
+) -> Vec<StoredEvent>
+where
+    S: Spec,
+    RT: Runtime<S>,
+{
+    convert_to_runtime_events::<S, RT>(genesis_events, GENESIS_TX_HASH)
+}
+
+#[cfg(not(feature = "native"))]
+pub(crate) fn convert_genesis_events_to_stored<S, RT>(
+    _genesis_events: Vec<sov_modules_api::TypeErasedEvent>,
+) -> Vec<StoredEvent>
+where
+    S: Spec,
+    RT: Runtime<S>,
+{
+    Vec::new() // Return empty in non-native mode
+}
+
+/// Create a genesis transaction receipt containing the given events
+pub(crate) fn create_genesis_transaction_receipt<S: Spec>(
+    stored_events: Vec<StoredEvent>,
+) -> sov_modules_api::TransactionReceipt<S> {
+    use sov_modules_api::{SuccessfulTxContents, TxEffect};
+    use sov_rollup_interface::stf::TransactionReceipt;
+
+    TransactionReceipt {
+        tx_hash: GENESIS_TX_HASH.into(),
+        body_to_save: None, // No transaction body for genesis
+        events: stored_events,
+        receipt: TxEffect::Successful(SuccessfulTxContents {
+            gas_used: S::Gas::zero(), // Genesis doesn't consume gas
+        }),
+    }
+}
+
+/// Create a genesis batch receipt containing the genesis transaction
+pub(crate) fn create_genesis_batch_receipt<S: Spec>(
+    genesis_tx_receipt: sov_modules_api::TransactionReceipt<S>,
+    genesis_da_address: <<S as Spec>::Da as DaSpec>::Address,
+    gas_price: <S::Gas as Gas>::Price,
+) -> sov_rollup_interface::stf::BatchReceipt<sov_modules_api::BatchSequencerReceipt<S>, sov_modules_api::TxReceiptContents<S>> {
+    use sov_modules_api::{Amount, BatchSequencerOutcome, BatchSequencerReceipt, Rewards};
+    use sov_rollup_interface::stf::BatchReceipt;
+
+    BatchReceipt {
+        batch_hash: GENESIS_BATCH_HASH,
+        tx_receipts: vec![genesis_tx_receipt],
+        ignored_tx_receipts: vec![], // No ignored transactions at genesis
+        inner: BatchSequencerReceipt {
+            da_address: genesis_da_address,
+            gas_price,
+            gas_used: S::Gas::zero(), // No gas used at genesis
+            outcome: BatchSequencerOutcome {
+                rewards: Rewards {
+                    accumulated_reward: Amount::ZERO,
+                    accumulated_penalty: Amount::ZERO,
+                },
+            },
+        },
+    }
+}

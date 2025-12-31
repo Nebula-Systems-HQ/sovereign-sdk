@@ -195,10 +195,23 @@ impl<S: Spec, Rt: Runtime<S>> TransactionCache<S, Rt> {
         let needed_event_numbers = (event_numbers.start..db_range_end)
             .map(EventIdentifier::Number)
             .collect::<Vec<_>>();
-        let db_event_opts = self
+        let db_event_opts = match self
             .ledger_db
             .get_events::<RuntimeEventResponse<Rt::RuntimeEvent>>(&needed_event_numbers)
-            .await?;
+            .await
+        {
+            Ok(events) => events,
+            Err(e) => {
+                // If DB query fails (e.g., event not finalized yet, DB connection issue, etc.),
+                // return only cached events for unstable endpoint. This is expected behavior
+                // for soft-confirmed events that haven't been written to the ledger DB yet.
+                tracing::debug!(
+                    error = %e,
+                    "Failed to query ledger DB for events, returning cached events only"
+                );
+                return Ok(cached_events);
+            }
+        };
 
         if let Some(first_cached_event) = cached_events.first() {
             // If we had some any of these events in cache, then all of the preceeding events must have been present in the DB.

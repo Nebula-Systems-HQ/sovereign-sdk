@@ -10,7 +10,7 @@ fn test_stf_success() {
     let address = MockAddress::from([1; 32]);
 
     let stf: &mut CheckHashPreimageStf = &mut CheckHashPreimageStf;
-    StateTransitionFunction::<MockZkvm, MockZkvm, MockDaSpec>::init_chain(
+    let (_root, _change_set, _genesis_batch) = StateTransitionFunction::<MockZkvm, MockZkvm, MockDaSpec>::init_chain(
         stf,
         &MockBlockHeader::default(),
         (),

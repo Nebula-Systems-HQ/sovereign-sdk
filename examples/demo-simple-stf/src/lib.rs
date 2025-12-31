@@ -73,8 +73,8 @@ impl<InnerVm: Zkvm, OuterVm: Zkvm, Da: DaSpec> StateTransitionFunction<InnerVm, 
 
         _base_state: Self::PreState,
         _params: Self::GenesisParams,
-    ) -> (Root, ()) {
-        (Root([]), ())
+    ) -> (Root, (), Option<BatchReceipt<Self::BatchReceiptContents, Self::TxReceiptContents>>) {
+        (Root([]), (), None)
     }
 
     fn apply_slot(

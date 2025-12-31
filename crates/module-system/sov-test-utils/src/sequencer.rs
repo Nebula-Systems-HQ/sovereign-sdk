@@ -114,7 +114,7 @@ impl<Rt: Runtime<TestSpec>> TestSequencerSetup<Rt> {
         let (stf_state, _ledger_state) =
             storage_manager.create_state_for(genesis_block.header())?;
 
-        let (_genesis_root, stf_state) = stf.init_chain(&Default::default(), stf_state, params);
+        let (_genesis_root, stf_state, _genesis_batch) = stf.init_chain(&Default::default(), stf_state, params);
         storage_manager.save_change_set(genesis_block.header(), stf_state, SchemaBatch::new())?;
         storage_manager.finalize(&genesis_block.header)?;
         let (stf_state, ledger_state) =

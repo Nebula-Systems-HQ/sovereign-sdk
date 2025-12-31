@@ -82,16 +82,21 @@ impl<InnerVm: Zkvm, OuterVm: Zkvm, Da: DaSpec> StateTransitionFunction<InnerVm, 
 
         genesis_state: Self::PreState,
         params: Self::GenesisParams,
-    ) -> (Self::StateRoot, Self::ChangeSet) {
+    ) -> (
+        Self::StateRoot,
+        Self::ChangeSet,
+        Option<sov_rollup_interface::stf::BatchReceipt<Self::BatchReceiptContents, Self::TxReceiptContents>>,
+    ) {
         let mut hasher = sha2::Sha256::new();
         hasher.update(params);
 
-        HashStf::save_from_hasher(
+        let (state_root, change_set) = HashStf::save_from_hasher(
             hasher,
             genesis_state,
             &ArrayWitness::default(),
             <ProverStorage<S> as Storage>::PRE_GENESIS_ROOT,
-        )
+        );
+        (state_root, change_set, None)
     }
 
     #[tracing::instrument(name = "HashStf::apply_slot", skip_all)]

@@ -303,14 +303,19 @@ pub trait StateTransitionFunction<InnerVm: Zkvm, OuterVm: Zkvm, Da: DaSpec> {
     type Witness: Default + Serialize + DeserializeOwned + Send + Sync + 'static;
 
     /// Perform one-time initialization for the genesis block and
-    /// returns the resulting root hash and changeset.
+    /// returns the resulting root hash, changeset, and optionally a genesis batch receipt
+    /// containing genesis events.
     /// If the init chain fails we panic.
     fn init_chain(
         &self,
         genesis_rollup_header: &Da::BlockHeader,
         genesis_state: Self::PreState,
         params: Self::GenesisParams,
-    ) -> (Self::StateRoot, Self::ChangeSet);
+    ) -> (
+        Self::StateRoot,
+        Self::ChangeSet,
+        Option<BatchReceipt<Self::BatchReceiptContents, Self::TxReceiptContents>>,
+    );
 
     /// Called at each **DA-layer block** - whether or not that block contains any
     /// data relevant to the rollup.
