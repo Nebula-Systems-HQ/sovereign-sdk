@@ -416,7 +416,7 @@ jobs:
 
   check-demo-rollup-table-of-contents:
     runs-on: ubuntu-24.04
-    needs:
+    steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v3
       - run: npm install -g doctoc
@@ -434,6 +434,7 @@ jobs:
 
   check-demo-rollup-bash-commands:
     runs-on: ubuntu-24.04
+    needs:
       - check
     timeout-minutes: 60
     env:
