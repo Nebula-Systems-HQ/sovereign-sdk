@@ -69,7 +69,7 @@ concurrency:
 jobs:
   check-aggregate:
     # Follows the guide at <https://github.com/re-actors/alls-green>.
-    runs-on: nscloud-ubuntu-22.04-amd64-2x4
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     if: always()
     needs:
@@ -104,7 +104,7 @@ jobs:
 
   check:
     name: check
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-dev-250gb-1-88
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       RUSTFLAGS: "-D warnings"
@@ -139,7 +139,7 @@ jobs:
     name: bench_check
     needs: check
     # Privileged feature is needed for proper `io_uring` functionality needed by NOMT
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-bench-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       RUSTFLAGS: "-D warnings"
@@ -161,7 +161,7 @@ jobs:
     name: rollup_tps_validation
     needs: check
     # Privileged feature is needed for proper `io_uring` functionality needed by NOMT
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-bench-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
@@ -182,7 +182,7 @@ jobs:
     # building dependencies, only checking them, so we can share caches
     # effectively.
     needs: check
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-dev-250gb-1-88
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         partition: [1, 2, 3]
@@ -213,7 +213,7 @@ jobs:
     # building dependencies, only checking them, so we can share caches
     # effectively.
     needs: check
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-dev-250gb-1-88
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         partition: [1, 2, 3]
@@ -238,7 +238,7 @@ jobs:
   nextest:
     name: nextest
     # Privileged feature is needed for proper `io_uring` functionality needed by NOMT
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x64-test-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       RISC0_DEV_MODE: "true"
@@ -258,7 +258,7 @@ jobs:
   nextest_all_features:
     name: nextest_all_features
     # Privileged feature is needed for proper `io_uring` functionality needed by NOMT
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x64-test-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       RISC0_DEV_MODE: "true"
@@ -278,7 +278,7 @@ jobs:
 
   doctests:
     name: doctests
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-test-250gb-1-88
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       RUSTFLAGS: "-D warnings"
@@ -299,8 +299,7 @@ jobs:
   coverage:
     name: coverage
     # TODO:try coverage 32x64
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x64-coverage-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
-    timeout-minutes: 90
+    runs-on: ubuntu-24.04
     env:
       SKIP_GUEST_BUILD: "1"
       SP1_SKIP_PROGRAM_BUILD: "true"
@@ -326,8 +325,7 @@ jobs:
           fail_ci_if_error: false
 
   cargo-deny-check-licenses:
-    runs-on: nscloud-ubuntu-22.04-amd64-2x4
-    timeout-minutes: 30
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - uses: taiki-e/install-action@cargo-deny
@@ -417,8 +415,8 @@ jobs:
   #       uses: actions/deploy-pages@v4
 
   check-demo-rollup-table-of-contents:
-    runs-on: nscloud-ubuntu-22.04-amd64-2x4
-    steps:
+    runs-on: ubuntu-24.04
+    needs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v3
       - run: npm install -g doctoc
@@ -435,8 +433,7 @@ jobs:
         run: git diff --exit-code
 
   check-demo-rollup-bash-commands:
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-32x64-demo-rollup-250gb-1-88
-    needs:
+    runs-on: ubuntu-24.04
       - check
     timeout-minutes: 60
     env:
@@ -463,7 +460,7 @@ jobs:
       - run: chmod +x demo-rollup-readme.sh && ./demo-rollup-readme.sh
 
   check-demo-rollup-bash-commands-mock-da:
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-32x64-demo-rollup-250gb-1-88
+    runs-on: ubuntu-24.04
     needs:
       - check
     timeout-minutes: 60
@@ -485,7 +482,7 @@ jobs:
       - run: chmod +x demo-rollup-readme.sh && ./demo-rollup-readme.sh
 
   check-constant-overriding-is-disabled-in-release-mode:
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-test-250gb-1-88
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
@@ -495,7 +492,7 @@ jobs:
       - run: make check-constant-overriding-is-disabled-in-release-mode
 
   validate-packages-to-publish-yml:
-    runs-on: nscloud-ubuntu-22.04-amd64-2x4
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
       - run: ./scripts/validate_packages_to_publish_yml.sh
@@ -514,7 +511,7 @@ jobs:
       - run: git diff --exit-code
 
   check-web3-js-sdk-integration:
-    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-32x64-demo-rollup-250gb-1-88
+    runs-on: ubuntu-24.04
     needs:
       - check
     timeout-minutes: 60
