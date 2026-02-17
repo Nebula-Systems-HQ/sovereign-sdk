@@ -36,14 +36,6 @@ pub struct GasSnapshot<S: Spec> {
     pub outer_remaining_gas: S::Gas,
     /// Outer payer's remaining funds (to restore on layer end).
     pub outer_remaining_funds: Amount,
-    /// Gas payer (User B)'s starting balance for this layer.
-    /// Currently stored for debugging/logging purposes.
-    #[allow(dead_code)]
-    pub payer_balance: Amount,
-    /// Gas limit for this layer.
-    /// Reserved for future gas limit enforcement within layers.
-    #[allow(dead_code)]
-    pub gas_limit: S::Gas,
 }
 
 /// Error type for gas payer layer operations.
@@ -282,16 +274,9 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             Some(m) => m,
             None => {
                 // No gas meter means no gas tracking - create a minimal snapshot
-                // Read gas payer's balance anyway for validation
-                let payer_balance = biller
-                    .gas_balance_of(&gas_payer, billing_state)?
-                    .unwrap_or(Amount::ZERO);
-
                 return Ok(GasSnapshot {
                     outer_remaining_gas: S::Gas::MAX,
                     outer_remaining_funds: Amount::ZERO,
-                    payer_balance,
-                    gas_limit,
                 });
             }
         };
@@ -339,13 +324,11 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         let snapshot = GasSnapshot {
             outer_remaining_gas: meter.remaining_gas,
             outer_remaining_funds,
-            payer_balance,
-            gas_limit,
         };
 
-        // Perform the meter swap: set remaining_funds to gas payer's balance
-        // This makes subsequent gas charges come from the gas payer's "pocket"
-        meter.remaining_funds = Some(payer_balance);
+        // Perform the meter swap: set remaining_funds to the gas limit cost
+        // This caps how much gas the layer can consume (User B pays up to gas_limit)
+        meter.remaining_funds = Some(gas_cost);
 
         Ok(snapshot)
     }
@@ -403,15 +386,11 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             Ok(GasSnapshot {
                 outer_remaining_gas: meter.remaining_gas,
                 outer_remaining_funds,
-                payer_balance: outer_remaining_funds, // Same as outer in legacy mode
-                gas_limit,
             })
         } else {
             Ok(GasSnapshot {
                 outer_remaining_gas: S::Gas::MAX,
                 outer_remaining_funds: Amount::ZERO,
-                payer_balance: Amount::ZERO,
-                gas_limit,
             })
         }
     }
