@@ -219,9 +219,9 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
 
     /// Adds a new revertable layer with a different gas payer on top of the current layers.
     ///
-    /// This method performs a "meter swap" - similar to switching `msg.sender` context
-    /// for gas accounting in EVM nested calls. Gas charged within this layer will be
-    /// billed to the gas payer (User B), not the outer payer (User A).
+    /// This method performs a "meter swap" - switching the gas payer context for
+    /// nested calls. Gas charged within this layer will be billed to the gas payer
+    /// (User B), not the outer payer (User A).
     ///
     /// # Arguments
     /// * `gas_payer` - The address of the account paying for gas in this layer
@@ -541,9 +541,9 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
 
     /// Reverts and discards the top layer, billing the gas payer if present.
     ///
-    /// Gas payments are permanent (EVM behavior) - even when reverting, the gas
-    /// consumed must still be paid. This prevents DoS attacks where users consume
-    /// gas and then revert to avoid payment.
+    /// Gas payments are permanent - even when reverting, the gas consumed must
+    /// still be paid. This prevents DoS attacks where users consume gas and then
+    /// revert to avoid payment.
     ///
     /// # Arguments
     /// * `biller` - Implementation of GasBiller for transferring gas tokens

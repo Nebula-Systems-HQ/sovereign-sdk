@@ -62,9 +62,9 @@ impl std::error::Error for GasBillingError {}
 /// layer is settled (committed or reverted), the gas consumed needs to be
 /// billed to the gas payer.
 ///
-/// # Example (Solidity Analogy)
-/// Think of this like switching `msg.sender` context for gas accounting
-/// in nested contract calls. The inner call's gas is charged to the callee's
+/// # Example
+/// Think of this like switching the payer context for gas accounting
+/// in nested calls. The inner call's gas is charged to the callee's
 /// account, not the original caller.
 ///
 /// [`LayeredRevertableTxState`]: crate::state::accessors::scratchpad::LayeredRevertableTxState
