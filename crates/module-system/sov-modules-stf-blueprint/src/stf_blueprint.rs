@@ -42,18 +42,17 @@ where
         }
     }
 
-
     /// [`StfBlueprint`] constructor with a custom [`Runtime`] value and optional encryption layer.
-    pub fn with_runtime(runtime: RT, encryption_layer: Option<sov_encryption::EncryptionLayer>) -> Self {
+    pub fn with_runtime(
+        runtime: RT,
+        encryption_layer: Option<sov_encryption::EncryptionLayer>,
+    ) -> Self {
         Self {
             runtime,
             encryption_layer,
             phantom_context: PhantomData,
         }
     }
-
-
-
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     #[cfg_attr(feature = "bench", sov_modules_api::cycle_tracker)]

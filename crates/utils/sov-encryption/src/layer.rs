@@ -182,7 +182,10 @@ pub struct EncryptionLayer {
 impl EncryptionLayer {
     /// Create a new encryption layer from a key client config (preferred)
     pub async fn new(key_client_config: KeyClientConfig) -> Result<Self, EncryptionError> {
-        info!("Creating encryption layer with config: {:?}", key_client_config);
+        info!(
+            "Creating encryption layer with config: {:?}",
+            key_client_config
+        );
         let key_cache = Arc::new(KeyCache::new());
 
         // Handle different key client configurations
@@ -236,13 +239,11 @@ impl EncryptionLayer {
         Ok(Self { key_cache })
     }
 
-
+    // TODO: Remove #[allow(deprecated)] when aes-gcm 0.11 stable is released
+    // See: https://github.com/RustCrypto/AEADs/blob/master/aes-gcm/CHANGELOG.md
+    #[allow(deprecated)]
     #[cfg(feature = "aes-encryption")]
-    fn encrypt_with_key(
-        &self,
-        key: &[u8],
-        plaintext: &[u8],
-    ) -> Result<Vec<u8>, EncryptionError> {
+    fn encrypt_with_key(&self, key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, EncryptionError> {
         if key.len() != AES_256_KEY_SIZE {
             return Err(EncryptionError::InvalidKeyFormat(format!(
                 "Expected {} byte key, got {}",
@@ -277,6 +278,9 @@ impl EncryptionLayer {
         Ok(result)
     }
 
+    // TODO: Remove #[allow(deprecated)] when aes-gcm 0.11 stable is released
+    // See: https://github.com/RustCrypto/AEADs/blob/master/aes-gcm/CHANGELOG.md
+    #[allow(deprecated)]
     #[cfg(feature = "aes-encryption")]
     fn decrypt_with_key(
         &self,
@@ -317,12 +321,12 @@ impl EncryptionLayer {
     }
 
     /// Start a unix socket listener for pushed keys from the key service.
-    /// 
+    ///
     /// This spawns a background task that:
     /// - Binds to the socket with exponential backoff retry (never gives up)
     /// - Accepts connections and processes key updates
     /// - On errors, logs and retries (never exits)
-    /// 
+    ///
     /// Errors are surfaced through logging, not return values. The task is designed
     /// to be resilient and recover from transient failures.
     ///
@@ -379,7 +383,8 @@ impl EncryptionLayer {
                         Ok((stream, _)) => {
                             info!("🔌 Key service connected");
 
-                            if let Err(e) = Self::handle_key_connection(stream, cache.clone()).await {
+                            if let Err(e) = Self::handle_key_connection(stream, cache.clone()).await
+                            {
                                 warn!("⚠️ Key connection ended: {}", e);
                             }
 
@@ -404,7 +409,7 @@ impl EncryptionLayer {
                 debug!("📋 PARSED KEY SERVICE: Successfully deserialized KeyUpdate");
                 Ok(key_update)
             }
-            Err(e) => Err(format!("Failed to deserialize KeyUpdate: {}", e)),
+            Err(e) => Err(format!("Failed to deserialize KeyUpdate: {e}")),
         }
     }
 
@@ -520,7 +525,10 @@ impl EncryptionLayer {
         let key = self.key_cache.get_key_for_slot(slot_number);
 
         if let Some(ref k) = key {
-            debug!("🔑 INSPECT: Key '{}' available for slot {}", k.id, slot_number);
+            debug!(
+                "🔑 INSPECT: Key '{}' available for slot {}",
+                k.id, slot_number
+            );
         } else {
             debug!("🔑 INSPECT: No key available for slot {}", slot_number);
         }
@@ -530,23 +538,29 @@ impl EncryptionLayer {
 
     /// Encrypt data for a specific slot.
     /// Returns (encrypted_data, key_id) where key_id identifies which key was used.
-    /// 
+    ///
     /// Key selection logic:
     /// 1. Find newest key where key_slot <= batch_slot
     /// 2. Fallback: use the most recent key if all keys have slots > batch_slot
     #[cfg(feature = "aes-encryption")]
-    pub fn encrypt_for_slot(&self, slot_number: u64, plaintext: &[u8]) -> Result<(Vec<u8>, String), EncryptionError> {
-        let key = self.key_cache.get_key_for_slot(slot_number)
-            .ok_or_else(|| EncryptionError::InvalidKeyFormat(
-                "No encryption key available".into()
-            ))?;
+    pub fn encrypt_for_slot(
+        &self,
+        slot_number: u64,
+        plaintext: &[u8],
+    ) -> Result<(Vec<u8>, String), EncryptionError> {
+        let key = self
+            .key_cache
+            .get_key_for_slot(slot_number)
+            .ok_or_else(|| {
+                EncryptionError::InvalidKeyFormat("No encryption key available".into())
+            })?;
 
-            tracing::info!(
+        tracing::info!(
             "🔐 ENCRYPT: Using key '{}' for batch slot {} ({} bytes)",
-                key.id,
-                slot_number,
-                plaintext.len()
-            );
+            key.id,
+            slot_number,
+            plaintext.len()
+        );
 
         let encrypted = self.encrypt_with_key(key.material.expose_secret(), plaintext)?;
         Ok((encrypted, key.id))
@@ -554,7 +568,7 @@ impl EncryptionLayer {
 
     /// Decrypt data using the specific key ID that was used for encryption.
     /// Falls back to trying all keys if the specified key is not found or fails.
-    /// 
+    ///
     /// Automatically prunes old keys after successful decryption, keeping KEY_PRUNE_BUFFER_SIZE
     /// keys as a buffer before the used key.
     #[cfg(feature = "aes-encryption")]
@@ -567,19 +581,20 @@ impl EncryptionLayer {
         if let Some(key) = self.key_cache.get_key_by_id(key_id) {
             match self.decrypt_with_key(key.material.expose_secret(), ciphertext) {
                 Ok(plaintext) => {
-            tracing::debug!(
+                    tracing::debug!(
                         "🔓 DECRYPT: Successfully decrypted with key '{}' ({} bytes)",
                         key_id,
-                ciphertext.len()
-            );
-            
+                        ciphertext.len()
+                    );
+
                     // Prune old keys, keeping buffer
-                    self.key_cache.prune_keys_before_id(key_id, KEY_PRUNE_BUFFER_SIZE);
-            
-            return Ok(plaintext);
-        }
+                    self.key_cache
+                        .prune_keys_before_id(key_id, KEY_PRUNE_BUFFER_SIZE);
+
+                    return Ok(plaintext);
+                }
                 Err(e) => {
-        tracing::warn!(
+                    tracing::warn!(
                         "🔓 Key '{}' found but decryption failed: {}, trying fallback",
                         key_id,
                         e
@@ -598,22 +613,20 @@ impl EncryptionLayer {
             if let Ok(plaintext) = self.decrypt_with_key(key.material.expose_secret(), ciphertext) {
                 let used_key_id = key.id.clone();
                 drop(queue); // Release read lock before pruning
-                
-                tracing::info!(
-                    "🔓 FALLBACK SUCCESS: Decrypted with key '{}'",
-                    used_key_id
-                );
+
+                tracing::info!("🔓 FALLBACK SUCCESS: Decrypted with key '{}'", used_key_id);
 
                 // Prune old keys, keeping buffer
-                self.key_cache.prune_keys_before_id(&used_key_id, KEY_PRUNE_BUFFER_SIZE);
-                
+                self.key_cache
+                    .prune_keys_before_id(&used_key_id, KEY_PRUNE_BUFFER_SIZE);
+
                 return Ok(plaintext);
             }
         }
         drop(queue);
 
         Err(EncryptionError::DecryptionFailed(
-            "No available key could decrypt the data".into()
+            "No available key could decrypt the data".into(),
         ))
     }
 
