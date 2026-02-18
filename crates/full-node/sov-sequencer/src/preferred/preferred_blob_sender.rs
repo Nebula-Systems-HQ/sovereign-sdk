@@ -57,7 +57,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
                 //  3. Node crash at an inconvenient time.
                 // Let's restore all missing blob data to make sure they land on the DA.
                 let blobs_to_send =
-                create_blobs_to_send(all_completed_blobs, shared_encryption_layer.as_ref())?;
+                    create_blobs_to_send(all_completed_blobs, shared_encryption_layer.as_ref())?;
                 let (inner, blob_sender_handle) = BlobSender::new(
                     da.clone(),
                     ledger_db,
@@ -76,7 +76,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
                         inner: Some(inner),
                         nb_of_concurrent_blob_submissions,
                         encryption_layer: shared_encryption_layer,
-                },
+                    },
                     Some(blob_sender_handle),
                 ))
             }
@@ -111,8 +111,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
         };
 
         let blob_id = batch.blob_id;
-        let serialized = batch_bytes(batch, self.encryption_layer.as_ref())?;
-        let data = Arc::from(serialized);
+        let data = batch_bytes(batch, self.encryption_layer.as_ref())?;
 
         inner.publish_batch_blob(data, blob_id).await?;
 
@@ -163,8 +162,7 @@ pub fn create_blobs_to_send(
         match blob {
             ReadBlob::Batch(batch) => {
                 let blob_id = batch.blob_id;
-                let serialized = batch_bytes(batch, encryption_layer)?;
-                let data = Arc::from(serialized);
+                let data = batch_bytes(batch, encryption_layer)?;
                 blobs_to_send.push((BlobToSend::Batch { data }, blob_id));
             }
             ReadBlob::Proof {
@@ -212,7 +210,8 @@ fn batch_bytes(
         let txs_serialized = borsh::to_vec(&*batch.txs)?;
 
         // Encrypt using the encryption layer's built-in fallback logic
-        let (encrypted_txs_data, encryption_key_id) = encryptor.encrypt_for_slot(slot_number, &txs_serialized)?;
+        let (encrypted_txs_data, encryption_key_id) =
+            encryptor.encrypt_for_slot(slot_number, &txs_serialized)?;
 
         // Create batch with serialized encrypted blob + metadata including key ID
         tracing::debug!(
@@ -220,15 +219,17 @@ fn batch_bytes(
             batch.sequence_number,
             encryption_key_id
         );
-        
-        Ok(borsh::to_vec::<EncryptedPreferredBatchData>(&EncryptedPreferredBatchData {
-            sequence_number: batch.sequence_number,
-            visible_slots_to_advance: batch.visible_slots_to_advance,
-            encrypted_txs_data,
-            tx_hashes: batch.tx_hashes,
-            encryption_key_id,
-        })?
-        .into())
+
+        Ok(
+            borsh::to_vec::<EncryptedPreferredBatchData>(&EncryptedPreferredBatchData {
+                sequence_number: batch.sequence_number,
+                visible_slots_to_advance: batch.visible_slots_to_advance,
+                encrypted_txs_data,
+                tx_hashes: batch.tx_hashes,
+                encryption_key_id,
+            })?
+            .into(),
+        )
     } else {
         // Original unencrypted path if encryption is not enabled
         tracing::debug!("📦 Creating batch with unencrypted txs");
