@@ -111,8 +111,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
         };
 
         let blob_id = batch.blob_id;
-        let serialized = batch_bytes(batch, self.encryption_layer.as_ref())?;
-        let data = Arc::from(serialized);
+        let data = batch_bytes(batch, self.encryption_layer.as_ref())?;
 
         inner.publish_batch_blob(data, blob_id).await?;
 
@@ -163,8 +162,7 @@ pub fn create_blobs_to_send(
         match blob {
             ReadBlob::Batch(batch) => {
                 let blob_id = batch.blob_id;
-                let serialized = batch_bytes(batch, encryption_layer)?;
-                let data = Arc::from(serialized);
+                let data = batch_bytes(batch, encryption_layer)?;
                 blobs_to_send.push((BlobToSend::Batch { data }, blob_id));
             }
             ReadBlob::Proof {

@@ -60,8 +60,7 @@ impl PreferredBlobData {
     fn blob_type(&self) -> BlobType {
         match self {
             PreferredBlobData::Proof(_) => BlobType::Proof,
-            PreferredBlobData::Batch(_) => BlobType::Batch,
-            PreferredBlobData::EncryptedBatch(_) => BlobType::Batch,
+            PreferredBlobData::Batch(_) | PreferredBlobData::EncryptedBatch(_) => BlobType::Batch,
         }
     }
 }
