@@ -40,6 +40,7 @@ use side_effects::SideEffectsTask;
 use sov_blob_sender::{new_blob_id, BlobExecutionStatus};
 use sov_blob_storage::{PreferredBatchData, SequenceNumber};
 use sov_db::ledger_db::LedgerDb;
+use sov_encryption::EncryptionLayer;
 pub use sov_full_node_configs::sequencer::{
     PostgresConfig, PreferredSequencerConfig, RecoveryStrategy, TimingOracleConfig,
 };

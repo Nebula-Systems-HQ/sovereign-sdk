@@ -4,6 +4,7 @@ use super::*;
 use anyhow::Context;
 use anyhow::Result;
 use sov_db::ledger_db::LedgerDb;
+use sov_encryption::EncryptionLayer;
 use sov_modules_api::rest::StateUpdateReceiver;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
