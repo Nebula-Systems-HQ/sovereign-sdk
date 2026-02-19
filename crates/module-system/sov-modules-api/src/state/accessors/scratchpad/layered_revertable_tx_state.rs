@@ -232,7 +232,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         billing_state: &mut impl StateAccessor,
     ) -> Result<&mut Self, GasPayerError<S::Gas>> {
         let gas_snapshot =
-            self.validate_and_swap_gas_payer(gas_payer.clone(), gas_limit, biller, billing_state)?;
+            self.validate_and_swap_gas_payer(gas_payer, gas_limit, biller, billing_state)?;
         self.layers
             .push(StateLayer::new_with_gas_payer(gas_payer, gas_snapshot));
         Ok(self)
@@ -401,7 +401,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             return Ok(());
         };
         let (gas_payer, gas_snapshot) = match (&layer.gas_payer, &layer.gas_snapshot) {
-            (Some(payer), Some(snapshot)) => (payer.clone(), snapshot.clone()),
+            (Some(payer), Some(snapshot)) => (*payer, snapshot.clone()),
             _ => return Ok(()),
         };
 
