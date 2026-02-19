@@ -1467,8 +1467,6 @@ mod tests {
     #[test]
     fn test_gas_payer_layer_creation() {
         use crate::{Amount, Gas, Spec};
-
-        println!("\n=== test_gas_payer_layer_creation ===");
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
 
@@ -1488,14 +1486,9 @@ mod tests {
 
         // Create a layered state
         let mut layered_state = LayeredRevertableTxState::new(&mut working_set);
-        println!(
-            "Created LayeredRevertableTxState with {} layers",
-            layered_state.layer_depth()
-        );
 
         // Create a dummy gas payer address
         let gas_payer = <TestSpec as crate::Spec>::Address::from([1u8; 28]);
-        println!("Gas payer address: {:?}", gas_payer);
 
         // Add layer with gas payer and gas limit
         let gas_limit = <TestSpec as Spec>::Gas::ZEROED;
@@ -1508,38 +1501,21 @@ mod tests {
                 &mut billing_state,
             )
             .unwrap();
-        println!(
-            "Added layer with gas payer, now {} layers",
-            layered_state.layer_depth()
-        );
 
         assert_eq!(layered_state.layer_depth(), 1);
 
         // Verify the layer has a gas payer
         let layer = &layered_state.layers[0];
-        println!("Layer has gas_payer: {:?}", layer.gas_payer.is_some());
-        println!("Layer has gas_snapshot: {:?}", layer.gas_snapshot.is_some());
         if let Some(ref snapshot) = layer.gas_snapshot {
-            println!(
-                "  snapshot.outer_remaining_gas: {:?}",
-                snapshot.outer_remaining_gas
-            );
-            println!(
-                "  snapshot.outer_remaining_funds: {:?}",
-                snapshot.outer_remaining_funds
-            );
         }
         assert!(layer.gas_payer.is_some());
         assert_eq!(layer.gas_payer.as_ref().unwrap(), &gas_payer);
         assert!(layer.gas_snapshot.is_some());
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_gas_payer_layer_state_operations() {
         use crate::{Amount, Gas, Spec};
-
-        println!("\n=== test_gas_payer_layer_state_operations ===");
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
 
@@ -1570,39 +1546,27 @@ mod tests {
         layered_state
             .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &biller, &mut billing_state)
             .unwrap();
-        println!(
-            "Added gas payer layer, depth: {}",
-            layered_state.layer_depth()
-        );
 
         // Write data in gas payer layer
         layered_state.set_value(namespace, &key, value.clone());
-        println!("Wrote value to layer");
 
         // Verify data is visible
         let mut metric = StateAccessMetric::new_read();
         let read_value = layered_state.get_value(namespace, &key, &mut metric);
-        println!("Read value: {:?}", read_value);
         assert_eq!(read_value, Some(value.clone()));
 
         // Revert the layer
-        println!("Reverting layer...");
         layered_state.revert_layer_without_billing();
-        println!("Layer reverted, depth: {}", layered_state.layer_depth());
 
         // Data should be gone
         let mut metric = StateAccessMetric::new_read();
         let read_after_revert = layered_state.get_value(namespace, &key, &mut metric);
-        println!("Read value after revert: {:?}", read_after_revert);
         assert_eq!(read_after_revert, None);
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_gas_payer_nested_layers() {
         use crate::{Amount, Gas, Spec};
-
-        println!("\n=== test_gas_payer_nested_layers ===");
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
 
@@ -1631,11 +1595,6 @@ mod tests {
         // Add outer layer (regular)
         layered_state.add_revertable_layer();
         layered_state.set_value(namespace, &outer_key, outer_value.clone());
-        println!(
-            "Added OUTER layer (regular), depth: {}",
-            layered_state.layer_depth()
-        );
-        println!("  Wrote outer_value to outer_key");
 
         // Add inner layer with gas payer
         let gas_payer = <TestSpec as crate::Spec>::Address::from([2u8; 28]);
@@ -1645,11 +1604,6 @@ mod tests {
             .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &biller, &mut billing_state)
             .unwrap();
         layered_state.set_value(namespace, &inner_key, inner_value.clone());
-        println!(
-            "Added INNER layer (with gas payer), depth: {}",
-            layered_state.layer_depth()
-        );
-        println!("  Wrote inner_value to inner_key");
 
         assert_eq!(layered_state.layer_depth(), 2);
 
@@ -1658,17 +1612,11 @@ mod tests {
         let outer_read = layered_state.get_value(namespace, &outer_key, &mut metric);
         let mut metric = StateAccessMetric::new_read();
         let inner_read = layered_state.get_value(namespace, &inner_key, &mut metric);
-        println!(
-            "Before revert - outer_key: {:?}, inner_key: {:?}",
-            outer_read, inner_read
-        );
         assert_eq!(outer_read, Some(outer_value.clone()));
         assert_eq!(inner_read, Some(inner_value.clone()));
 
         // Revert inner layer (with gas payer)
-        println!("Reverting INNER layer (gas payer layer)...");
         layered_state.revert_layer_without_billing();
-        println!("After revert, depth: {}", layered_state.layer_depth());
         assert_eq!(layered_state.layer_depth(), 1);
 
         // Inner value should be gone, outer should remain
@@ -1676,20 +1624,13 @@ mod tests {
         let inner_after = layered_state.get_value(namespace, &inner_key, &mut metric);
         let mut metric = StateAccessMetric::new_read();
         let outer_after = layered_state.get_value(namespace, &outer_key, &mut metric);
-        println!(
-            "After revert - outer_key: {:?}, inner_key: {:?}",
-            outer_after, inner_after
-        );
         assert_eq!(inner_after, None);
         assert_eq!(outer_after, Some(outer_value));
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_gas_payer_layer_commit() {
         use crate::{Amount, Gas, GasMeter, Spec};
-
-        println!("\n=== test_gas_payer_layer_commit ===");
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
 
@@ -1721,14 +1662,9 @@ mod tests {
         layered_state
             .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &biller, &mut billing_state)
             .unwrap();
-        println!(
-            "Added gas payer layer, depth: {}",
-            layered_state.layer_depth()
-        );
 
         // Write data
         layered_state.set_value(namespace, &key, value.clone());
-        println!("Wrote value to layer");
 
         // Charge some gas
         let gas_to_charge = <TestSpec as Spec>::Gas::from([20u64, 20u64]);
@@ -1736,20 +1672,15 @@ mod tests {
             meter.charge_gas(gas_to_charge).expect("Should charge gas");
         }
         layered_state.track_gas_in_layer(gas_to_charge);
-        println!("Charged gas: {:?}", gas_to_charge);
 
         // Commit the layer WITH BILLING
-        println!("Committing layer with billing...");
         layered_state
             .commit_layer(&mut biller, &sequencer, &mut billing_state)
             .expect("commit_layer should succeed");
-        println!("Layer committed, depth: {}", layered_state.layer_depth());
         assert_eq!(layered_state.layer_depth(), 0);
 
         // Verify billing happened
         let expected_cost = gas_to_charge.value(gas_price);
-        println!("Expected billing: {:?}", expected_cost);
-        println!("Actual billing: {:?}", biller.total_transferred);
         assert_eq!(
             biller.total_transferred, expected_cost,
             "Gas should be billed on commit"
@@ -1758,16 +1689,12 @@ mod tests {
         // Data should still be visible (committed to inner state)
         let mut metric = StateAccessMetric::new_read();
         let read_value = layered_state.get_value(namespace, &key, &mut metric);
-        println!("Read value after commit: {:?}", read_value);
         assert_eq!(read_value, Some(value));
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_gas_consumed_tracking_in_layer() {
         use crate::{Amount, Gas, Spec};
-
-        println!("\n=== test_gas_consumed_tracking_in_layer ===");
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
 
@@ -1794,27 +1721,15 @@ mod tests {
         layered_state
             .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &biller, &mut billing_state)
             .unwrap();
-        println!(
-            "Added gas payer layer, depth: {}",
-            layered_state.layer_depth()
-        );
 
         // Initially, gas_consumed should be ZEROED
         let gas_consumed = &layered_state.layers[0].gas_consumed;
-        println!("gas_consumed: {:?}", gas_consumed);
-        println!(
-            "Expected ZEROED: {:?}",
-            <TestSpec as crate::Spec>::Gas::ZEROED
-        );
         assert_eq!(*gas_consumed, <TestSpec as crate::Spec>::Gas::ZEROED);
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_gas_payer_revert_restores_outer_funds() {
         use crate::{Amount, Gas, GasMeter, Spec};
-
-        println!("\n=== test_gas_payer_revert_restores_outer_funds ===");
 
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
@@ -1837,7 +1752,6 @@ mod tests {
 
         // Verify initial funds
         let meter = working_set.try_as_basic_gas_meter().unwrap();
-        println!("Initial remaining_funds: {:?}", meter.remaining_funds);
         assert_eq!(meter.remaining_funds, Some(initial_funds));
 
         // Create layered state
@@ -1851,27 +1765,15 @@ mod tests {
         layered_state
             .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &biller, &mut billing_state)
             .unwrap();
-        println!(
-            "Added gas payer layer, depth: {}",
-            layered_state.layer_depth()
-        );
 
         // Verify snapshot captured the OUTER payer's funds (before meter swap)
         let snapshot = layered_state.layers[0].gas_snapshot.as_ref().unwrap();
-        println!(
-            "Snapshot outer_remaining_funds: {:?}",
-            snapshot.outer_remaining_funds
-        );
         assert_eq!(snapshot.outer_remaining_funds, initial_funds);
 
         // After meter swap, remaining_funds is now gas_cost (gas_limit * gas_price)
         // gas_limit = [100, 100], gas_price = [1, 1], so gas_cost = 200
         let gas_cost = Amount::new(200);
         let meter = layered_state.inner.try_as_basic_gas_meter().unwrap();
-        println!(
-            "After meter swap, remaining_funds: {:?}",
-            meter.remaining_funds
-        );
         assert_eq!(
             meter.remaining_funds,
             Some(gas_cost),
@@ -1882,24 +1784,18 @@ mod tests {
         // Note: charge_gas internally calls track_gas_in_layer
         let gas_to_charge = <TestSpec as Spec>::Gas::from([10u64, 10u64]);
         layered_state.charge_gas(gas_to_charge).unwrap();
-        println!("Charged gas: {:?}", gas_to_charge);
 
         // Verify funds decreased from gas_cost, not initial_funds
         let meter = layered_state.inner.try_as_basic_gas_meter().unwrap();
-        println!("After charge, remaining_funds: {:?}", meter.remaining_funds);
 
         // Now revert the layer WITH BILLING - outer funds should be restored
         // minus the gas consumed (gas is permanent)
-        println!("Reverting layer with billing...");
         layered_state
             .revert_layer(&mut biller, &sequencer, &mut billing_state)
             .expect("revert_layer should succeed");
-        println!("Layer reverted, depth: {}", layered_state.layer_depth());
 
         // Verify billing happened - gas is permanent even on revert
         let expected_billing = gas_to_charge.value(gas_price);
-        println!("Expected billing: {:?}", expected_billing);
-        println!("Actual billing: {:?}", biller.total_transferred);
         assert_eq!(
             biller.total_transferred, expected_billing,
             "Gas should be billed even on revert"
@@ -1909,20 +1805,16 @@ mod tests {
         // The gas was paid by the gas_payer via token transfer (biller),
         // NOT by reducing the outer meter's remaining_funds.
         let meter = layered_state.inner.try_as_basic_gas_meter().unwrap();
-        println!("After revert, remaining_funds: {:?}", meter.remaining_funds);
         assert_eq!(
             meter.remaining_funds,
             Some(initial_funds),
             "Outer funds should be fully restored (gas paid by gas_payer via token transfer)"
         );
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_gas_payer_upfront_validation_out_of_gas() {
         use crate::{Amount, Gas, GasMeter, Spec};
-
-        println!("\n=== test_gas_payer_upfront_validation_out_of_gas ===");
 
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
@@ -1947,12 +1839,10 @@ mod tests {
         // We'll leave only 50 gas units in each dimension
         let meter = working_set.try_as_basic_gas_meter().unwrap();
         let initial_gas = meter.remaining_gas;
-        println!("Initial remaining_gas: {:?}", initial_gas);
 
         // Set remaining gas to a small value directly for testing
         let meter = working_set.try_as_basic_gas_meter().unwrap();
         meter.remaining_gas = <TestSpec as Spec>::Gas::from([50u64, 50u64]);
-        println!("Set remaining_gas to: {:?}", meter.remaining_gas);
 
         // Create layered state
         let mut layered_state = LayeredRevertableTxState::new(&mut working_set);
@@ -1962,10 +1852,6 @@ mod tests {
 
         // Try to create layer with gas_limit exceeding remaining gas (100 > 50)
         let excessive_gas_limit = <TestSpec as Spec>::Gas::from([100u64, 100u64]);
-        println!(
-            "Attempting to add layer with excessive gas_limit: {:?}",
-            excessive_gas_limit
-        );
 
         let result = layered_state.add_revertable_layer_with_gas_payer(
             gas_payer.clone(),
@@ -1973,7 +1859,6 @@ mod tests {
             &biller,
             &mut billing_state,
         );
-        println!("Result is_err: {:?}", result.is_err());
         assert!(result.is_err(), "Should fail with InsufficientGas error");
 
         match result {
@@ -1981,9 +1866,6 @@ mod tests {
                 required,
                 available,
             }) => {
-                println!("Correctly got InsufficientGas error");
-                println!("  required: {:?}", required);
-                println!("  available: {:?}", available);
             }
             Ok(_) => panic!("Expected InsufficientGas error, got Ok"),
             Err(other) => panic!("Expected InsufficientGas error, got: {:?}", other),
@@ -1991,10 +1873,6 @@ mod tests {
 
         // Now try with a reasonable gas limit (30 < 50) - should succeed
         let reasonable_gas_limit = <TestSpec as Spec>::Gas::from([30u64, 30u64]);
-        println!(
-            "Attempting to add layer with reasonable gas_limit: {:?}",
-            reasonable_gas_limit
-        );
 
         let result = layered_state.add_revertable_layer_with_gas_payer(
             gas_payer,
@@ -2003,15 +1881,11 @@ mod tests {
             &mut billing_state,
         );
         assert!(result.is_ok(), "Should succeed with reasonable gas limit");
-        println!("Successfully added layer with reasonable gas limit");
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_gas_payer_zero_gas_limit() {
         use crate::{Amount, Gas, Spec};
-
-        println!("\n=== test_gas_payer_zero_gas_limit ===");
 
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
@@ -2037,7 +1911,6 @@ mod tests {
 
         // Zero gas limit should be allowed (no-op layer)
         let zero_gas_limit = <TestSpec as Spec>::Gas::ZEROED;
-        println!("Attempting to add layer with zero gas_limit");
 
         let result = layered_state.add_revertable_layer_with_gas_payer(
             gas_payer,
@@ -2046,15 +1919,11 @@ mod tests {
             &mut billing_state,
         );
         assert!(result.is_ok(), "Zero gas limit should be allowed");
-        println!("Successfully added layer with zero gas limit");
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_commit_layer_with_billing() {
         use crate::{Amount, Gas, GasMeter, Spec};
-
-        println!("\n=== test_commit_layer_with_billing ===");
 
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
@@ -2095,7 +1964,6 @@ mod tests {
         // Track gas consumed in layer
         let gas_consumed = <TestSpec as Spec>::Gas::from([20u64, 20u64]);
         layered_state.track_gas_in_layer(gas_consumed);
-        println!("Charged gas: {:?}", gas_consumed);
 
         // Now commit with billing
         let result = layered_state.commit_layer(&mut biller, &sequencer, &mut billing_state);
@@ -2105,21 +1973,15 @@ mod tests {
         // gas_consumed = [20, 20], gas_price = [10, 10]
         // cost = 20*10 + 20*10 = 400
         let expected_cost = gas_consumed.value(gas_price);
-        println!("Expected cost: {:?}", expected_cost);
-        println!("Total transferred: {:?}", biller.total_transferred);
         assert_eq!(
             biller.total_transferred, expected_cost,
             "Should have transferred the correct gas cost"
         );
-
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_revert_layer_with_billing() {
         use crate::{Amount, Gas, GasMeter, Spec};
-
-        println!("\n=== test_revert_layer_with_billing ===");
 
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
@@ -2164,7 +2026,6 @@ mod tests {
 
         let gas_consumed = <TestSpec as Spec>::Gas::from([30u64, 30u64]);
         layered_state.track_gas_in_layer(gas_consumed);
-        println!("Charged gas: {:?}", gas_consumed);
 
         // Revert with billing - gas should still be charged!
         let result = layered_state.revert_layer(&mut biller, &sequencer, &mut billing_state);
@@ -2177,21 +2038,15 @@ mod tests {
 
         // But gas should still have been billed!
         let expected_cost = gas_consumed.value(gas_price);
-        println!("Expected cost: {:?}", expected_cost);
-        println!("Total transferred: {:?}", biller.total_transferred);
         assert_eq!(
             biller.total_transferred, expected_cost,
             "Gas should be billed even on revert"
         );
-
-        println!("=== PASSED ===\n");
     }
 
     #[test]
     fn test_commit_layer_skips_billing_when_no_gas_payer() {
         use crate::{Amount, Gas, Spec};
-
-        println!("\n=== test_commit_layer_skips_billing_when_no_gas_payer ===");
 
         let storage_manager = SimpleStorageManager::new();
         let storage = storage_manager.create_storage();
@@ -2237,7 +2092,5 @@ mod tests {
         let mut metric = StateAccessMetric::new_read();
         let read_value = layered_state.get_value(namespace, &key, &mut metric);
         assert_eq!(read_value, Some(value), "Data should be committed");
-
-        println!("=== PASSED ===\n");
     }
 }
