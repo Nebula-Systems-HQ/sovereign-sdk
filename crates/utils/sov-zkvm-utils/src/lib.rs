@@ -1,3 +1,5 @@
+#![allow(clippy::uninlined_format_args)]
+
 use std::process::Command;
 
 use convert_case::{Case, Casing};
