@@ -69,7 +69,7 @@ concurrency:
 jobs:
   check-aggregate:
     # Follows the guide at <https://github.com/re-actors/alls-green>.
-    runs-on: ubuntu-24.04
+    runs-on: nscloud-ubuntu-22.04-amd64-2x4
     timeout-minutes: 5
     if: always()
     needs:
@@ -104,13 +104,16 @@ jobs:
 
   check:
     name: check
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-dev-250gb-1-88
     timeout-minutes: 60
     env:
       RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
+          path: ./crates/fuzz/target
       # CI always operates on the entire workspace
       - run: cargo switcheroo disable
         shell: bash
@@ -136,13 +139,15 @@ jobs:
     name: bench_check
     needs: check
     # Privileged feature is needed for proper `io_uring` functionality needed by NOMT
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-bench-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
     timeout-minutes: 120
     env:
       RUSTFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       # CI always operates on the entire workspace
       - run: cargo switcheroo disable
         shell: bash
@@ -156,11 +161,13 @@ jobs:
     name: rollup_tps_validation
     needs: check
     # Privileged feature is needed for proper `io_uring` functionality needed by NOMT
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-bench-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       - name: rollup bench check
         env:
           SOV_BENCH_BLOCKS: 10
@@ -175,7 +182,7 @@ jobs:
     # building dependencies, only checking them, so we can share caches
     # effectively.
     needs: check
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-dev-250gb-1-88
     strategy:
       matrix:
         partition: [1, 2, 3]
@@ -188,7 +195,9 @@ jobs:
       CARGO_HACK_PARTITION_M: 3
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       # CI always operates on the entire workspace
       - run: cargo switcheroo disable
         shell: bash
@@ -204,7 +213,7 @@ jobs:
     # building dependencies, only checking them, so we can share caches
     # effectively.
     needs: check
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-dev-250gb-1-88
     strategy:
       matrix:
         partition: [1, 2, 3]
@@ -217,7 +226,9 @@ jobs:
       CARGO_HACK_PARTITION_M: 3
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       # CI always operates on the entire workspace
       - run: cargo switcheroo disable
         shell: bash
@@ -227,7 +238,7 @@ jobs:
   nextest:
     name: nextest
     # Privileged feature is needed for proper `io_uring` functionality needed by NOMT
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x64-test-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
     timeout-minutes: 60
     env:
       RISC0_DEV_MODE: "true"
@@ -236,7 +247,9 @@ jobs:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       # CI always operates on the entire workspace
       - run: cargo switcheroo disable
         shell: bash
@@ -245,7 +258,7 @@ jobs:
   nextest_all_features:
     name: nextest_all_features
     # Privileged feature is needed for proper `io_uring` functionality needed by NOMT
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x64-test-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
     timeout-minutes: 60
     env:
       RISC0_DEV_MODE: "true"
@@ -253,7 +266,9 @@ jobs:
       RUST_BACKTRACE: 1
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       # CI always operates on the entire workspace
       - run: cargo switcheroo disable
         shell: bash
@@ -263,7 +278,7 @@ jobs:
 
   doctests:
     name: doctests
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-test-250gb-1-88
     timeout-minutes: 60
     env:
       RUSTFLAGS: "-D warnings"
@@ -271,7 +286,9 @@ jobs:
       SP1_SKIP_PROGRAM_BUILD: "true"
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       # CI always operates on the entire workspace
       - run: cargo switcheroo disable
         shell: bash
@@ -282,7 +299,8 @@ jobs:
   coverage:
     name: coverage
     # TODO:try coverage 32x64
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x64-coverage-250gb-1-88;container.privileged=true;container.host-pid-namespace=true
+    timeout-minutes: 90
     env:
       SKIP_GUEST_BUILD: "1"
       SP1_SKIP_PROGRAM_BUILD: "true"
@@ -290,7 +308,9 @@ jobs:
       CARGO_BUILD_JOBS: 4
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       # Coverage is intentionally run without heavy crates, like demo-rollup.
       - name: cargo generate-lockfile
         if: hashFiles('Cargo.lock') == ''
@@ -306,7 +326,8 @@ jobs:
           fail_ci_if_error: false
 
   cargo-deny-check-licenses:
-    runs-on: ubuntu-24.04
+    runs-on: nscloud-ubuntu-22.04-amd64-2x4
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: taiki-e/install-action@cargo-deny
@@ -319,7 +340,10 @@ jobs:
 
   # Temporarily disabled until AWS credentials can be re-issued
   # cargo-doc-artifact:
-  #   runs-on: ubuntu-22.04
+  #   runs-on:
+  #     - nscloud-ubuntu-22.04-amd64-8x32-with-cache
+  #     - nscloud-cache-tag-cache-dev
+  #     - nscloud-cache-size-100gb
   #   timeout-minutes: 90
   #   env:
   #     RUSTDOCFLAGS: "-D warnings"
@@ -329,7 +353,9 @@ jobs:
   #     AWS_REGION: "us-east-1"
   #   steps:
   #     - uses: actions/checkout@v5
-  #     - uses: Swatinem/rust-cache@v2
+  #     - uses: namespacelabs/nscloud-cache-action@v1
+  #       with:
+  #         cache: rust
   #     - uses: ./.github/actions/setup
   #       with:
   #         github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -373,7 +399,7 @@ jobs:
   #         echo "Docs are available at https://${S3_BUCKET_NAME}.${AWS_REGION}.amazonaws.com/${TARGET_DIR}/index.html";
 
   # deploy-github-pages:
-  #   runs-on: ubuntu-22.04
+  #   runs-on: nscloud-ubuntu-22.04-amd64-2x4
   #   needs: cargo-doc-artifact
   #   timeout-minutes: 5
   #   if: github.ref == 'refs/heads/stable'
@@ -391,7 +417,7 @@ jobs:
   #       uses: actions/deploy-pages@v4
 
   check-demo-rollup-table-of-contents:
-    runs-on: ubuntu-24.04
+    runs-on: nscloud-ubuntu-22.04-amd64-2x4
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v3
@@ -409,7 +435,7 @@ jobs:
         run: git diff --exit-code
 
   check-demo-rollup-bash-commands:
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-32x64-demo-rollup-250gb-1-88
     needs:
       - check
     timeout-minutes: 60
@@ -428,14 +454,16 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       - name: Compile README.md to Bash
         run: bashtestmd --input examples/demo-rollup/README_CELESTIA.md --output demo-rollup-readme.sh --tag test-ci
       - run: cat demo-rollup-readme.sh
       - run: chmod +x demo-rollup-readme.sh && ./demo-rollup-readme.sh
 
   check-demo-rollup-bash-commands-mock-da:
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-32x64-demo-rollup-250gb-1-88
     needs:
       - check
     timeout-minutes: 60
@@ -445,7 +473,9 @@ jobs:
       RUST_LOG: "debug,sov_stf_runner=trace,sov_sequencer=trace,hyper=info,risc0_zkvm=warn,jmt=info,jsonrpsee-server=info,jsonrpsee-client=info,reqwest=info,sqlx=warn,tiny_http=warn,tower_http=info,tungstenite=info,risc0_circuit_rv32im=info,risc0_zkp::verify=info,h2=info,tower=info"
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       # CI always operates on the entire workspace
       - run: cargo switcheroo disable
         shell: bash
@@ -455,15 +485,17 @@ jobs:
       - run: chmod +x demo-rollup-readme.sh && ./demo-rollup-readme.sh
 
   check-constant-overriding-is-disabled-in-release-mode:
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-test-250gb-1-88
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       - run: make check-constant-overriding-is-disabled-in-release-mode
 
   validate-packages-to-publish-yml:
-    runs-on: ubuntu-24.04
+    runs-on: nscloud-ubuntu-22.04-amd64-2x4
     steps:
       - uses: actions/checkout@v5
       - run: ./scripts/validate_packages_to_publish_yml.sh
@@ -471,16 +503,18 @@ jobs:
         working-directory: .
 
   cargo-switcheroo-default:
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-16x32-dev-250gb-1-88
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: rust
       - run: cargo switcheroo set default
         # Exit status 0 means no changes were made.
       - run: git diff --exit-code
 
   check-web3-js-sdk-integration:
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-sov-ubuntu-24-04-amd64-32x64-demo-rollup-250gb-1-88
     needs:
       - check
     timeout-minutes: 60
@@ -490,13 +524,13 @@ jobs:
       CARGO_NET_GIT_FETCH_WITH_CLI: true
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - uses: namespacelabs/nscloud-cache-action@v1
         with:
+          cache: |
+            rust
+            pnpm
           path: |
-            ~/.pnpm-store
-            typescript/.turbo
-          key: ${{ runner.os }}-pnpm-turbo-${{ hashFiles('**/pnpm-lock.yaml') }}
+            ./typescript/.turbo
       - uses: actions/setup-node@v4
         with:
           node-version: 20.x
