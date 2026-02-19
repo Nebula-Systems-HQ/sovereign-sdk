@@ -40,7 +40,6 @@ use side_effects::SideEffectsTask;
 use sov_blob_sender::{new_blob_id, BlobExecutionStatus};
 use sov_blob_storage::{PreferredBatchData, SequenceNumber};
 use sov_db::ledger_db::LedgerDb;
-use sov_encryption::EncryptionLayer;
 pub use sov_full_node_configs::sequencer::{
     PostgresConfig, PreferredSequencerConfig, RecoveryStrategy, TimingOracleConfig,
 };
@@ -76,6 +75,7 @@ use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tracing::{error, info, trace};
 use transaction_subscriptions::TransactionCache;
+use sov_encryption::EncryptionLayer;
 
 use crate::common::{
     error_not_fully_synced, generic_accept_tx_error, loop_send_tx_notifications, poll_state_update,

@@ -41,10 +41,7 @@ pub use concurrent_state_checkpoint::ConcurrentStateCheckpoint;
 pub use genesis::GenesisStateAccessor;
 pub use internals::AccessoryDelta;
 pub use kernel::{BootstrapWorkingSet, KernelStateAccessor};
-pub use scratchpad::{
-    LayeredRevertableTxState, PreExecWorkingSet, RevertableTxState, TxChangeSet, TxScratchpad,
-    WorkingSet,
-};
+pub use scratchpad::{LayeredRevertableTxState, PreExecWorkingSet, RevertableTxState, TxChangeSet, TxScratchpad, WorkingSet};
 pub use temp_cache::BorshSerializedSize;
 
 use self::seal::UniversalStateAccessor;

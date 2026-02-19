@@ -1107,20 +1107,12 @@ impl<S: Spec> BlobStorage<S> {
         match encryption_layer {
             Some(encryption) => {
                 // Rollup is configured for encryption - decrypt then deserialize
-                self.decrypt_and_deserialize_batch(
-                    blob,
-                    charge_for_deserialization,
-                    state,
-                    encryption,
-                )
+                self.decrypt_and_deserialize_batch(blob, charge_for_deserialization, state, encryption)
             }
             None => {
                 // Rollup is configured for no encryption - all batches must be unencrypted
-                tracing::debug!(
-                    "STF: Deserializing unencrypted batch from blob {}",
-                    blob.hash()
-                );
-
+                tracing::debug!("STF: Deserializing unencrypted batch from blob {}", blob.hash());
+                
                 self.deserialize_or_try_slash_sender::<PreferredBatchData>(
                     blob,
                     charge_for_deserialization.map(|(seq, price)| (seq, *price)),
@@ -1165,7 +1157,9 @@ impl<S: Spec> BlobStorage<S> {
                 panic!(
                     "❌ STF: Failed to decrypt batch #{} with key '{}': {}. \
                     This indicates the encryption key is not available or data is corrupted.",
-                    encrypted_batch.sequence_number, encrypted_batch.encryption_key_id, e
+                    encrypted_batch.sequence_number,
+                    encrypted_batch.encryption_key_id,
+                    e
                 );
             });
 

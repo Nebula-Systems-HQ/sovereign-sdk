@@ -30,7 +30,8 @@ pub fn find_constants_manifest() -> anyhow::Result<Option<PathBuf>> {
         .map(PathBuf::from)
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "Neither `CONSTANTS_MANIFEST` nor `OUT_DIR` are set; can't find `{filename}` file"
+                "Neither `CONSTANTS_MANIFEST` nor `OUT_DIR` are set; can't find `{}` file",
+                filename
             )
         })?;
 
