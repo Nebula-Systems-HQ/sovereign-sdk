@@ -1,0 +1,23 @@
+#!/bin/bash
+
+# Pre-commit hook: format check + clippy
+
+set -e
+
+echo "Running cargo fmt check..."
+cargo fmt --all --check
+if [ $? -ne 0 ]; then
+    echo "Format check failed. Run 'cargo fmt --all' to fix."
+    exit 1
+fi
+
+echo "Running clippy..."
+SKIP_GUEST_BUILD=1 SP1_SKIP_PROGRAM_BUILD=true RISC0_SKIP_BUILD_KERNELS=1 \
+    cargo clippy --all-targets --all-features -- \
+    -D warnings \
+    -A clippy::uninlined_format_args \
+    -A clippy::to_string_in_format_args \
+    -A deprecated \
+    -A clippy::too_many_arguments
+
+echo "Pre-commit checks passed!"

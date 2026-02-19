@@ -182,7 +182,9 @@ impl<T: TryFrom<Vec<u8>> + AsRef<[u8]>> FromStr for HexString<T> {
 
 impl BlockHashTrait for HexHash {}
 
+#[allow(deprecated)]
 impl From<digest::generic_array::GenericArray<u8, digest::typenum::U32>> for HexHash {
+    #[allow(deprecated)]
     fn from(value: digest::generic_array::GenericArray<u8, digest::typenum::U32>) -> Self {
         HexHash::new(value.into())
     }

@@ -4,6 +4,7 @@ use super::*;
 use anyhow::Context;
 use anyhow::Result;
 use sov_db::ledger_db::LedgerDb;
+use sov_encryption::EncryptionLayer;
 use sov_modules_api::rest::StateUpdateReceiver;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
@@ -12,7 +13,6 @@ use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::debug;
-use sov_encryption::EncryptionLayer;
 
 /// Builder for [`PreferredSequencer`] initialization.
 pub struct Builder<S, Rt, Da>

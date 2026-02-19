@@ -1,6 +1,8 @@
 use std::num::NonZero;
 use std::sync::Arc;
 
+use sov_full_node_configs::runner::StfConfig;
+
 use axum::async_trait;
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt};
