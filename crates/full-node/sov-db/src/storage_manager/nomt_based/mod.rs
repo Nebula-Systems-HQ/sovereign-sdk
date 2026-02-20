@@ -54,7 +54,7 @@ pub struct NomtChangeSet {
     pub accessory: SchemaBatch,
     /// Use type erasure because the `pinned_cache` type is defined in sov-state, which depends on this crate.
     /// No type other than `PinnedCache` makes sense here.
-    pub pinned_cache: Option<Box<(dyn Any + Send + Sync)>>,
+    pub pinned_cache: Option<Box<dyn Any + Send + Sync>>,
 }
 
 #[cfg(test)]
@@ -94,7 +94,7 @@ where
         historical_state: HistoricalStateReader,
         accessory_db: AccessoryDb,
         strict_with_witness: bool,
-        pinned_cache: Option<Box<(dyn Any + Send + Sync)>>,
+        pinned_cache: Option<Box<dyn Any + Send + Sync>>,
     ) -> Self;
 }
 
@@ -108,7 +108,7 @@ pub struct NomtStorageManager<Da: DaSpec, H, S: InitializableNativeNomtStorage<H
 
     rockbound_snapshots: HashMap<Da::SlotHash, SnapshotGroup>,
     nomt_snapshots: Arc<RwLock<HashMap<Da::SlotHash, StateOverlay>>>,
-    pinned_caches: HashMap<Da::SlotHash, Box<(dyn Any + Send + Sync)>>,
+    pinned_caches: HashMap<Da::SlotHash, Box<dyn Any + Send + Sync>>,
 
     db_group: DbGroup<H, Da::SlotHash>,
 
@@ -138,8 +138,6 @@ where
             "Pruner versions to keep should be at least 1, got {pruner_versions_to_keep}",
         );
         let db_group = DbGroup::new(config)?;
-
-        db_group.verify_and_fix_commited_root_hashes()?;
         db_group.update_ledger_finalized_height()?;
 
         Ok(Self {
@@ -163,7 +161,7 @@ where
         &self,
         block_hash: Da::SlotHash,
         with_witness: bool,
-        pinned_cache: Option<Box<(dyn Any + Send + Sync)>>,
+        pinned_cache: Option<Box<dyn Any + Send + Sync>>,
     ) -> anyhow::Result<(S, DeltaReader)> {
         tracing::trace!(%block_hash, "Creating storage up to block hash");
         // References are in reversed chronological order,

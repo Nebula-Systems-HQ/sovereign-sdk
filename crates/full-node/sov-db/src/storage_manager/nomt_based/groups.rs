@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, RwLock};
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use anyhow::Context;
 use rockbound::cache::delta_reader::DeltaReader;
@@ -21,7 +22,7 @@ use crate::namespaces::{KernelNamespace, UserNamespace};
 use crate::pruner::Pruner;
 use crate::schema::namespace::NomtStateValues;
 use crate::schema::tables::ModuleAccessoryState;
-use crate::state_db_nomt::{NomtSessionBuilder, NomtStateDb, StateOverlay};
+use crate::state_db_nomt::{NomtSessionBuilder, NomtStateDb, StateOverlay, StateRootHashes};
 use crate::storage_manager::{update_ledger_finalized_height, InitializableNativeNomtStorage};
 
 const GIGABYTE: usize = 1024 * 1024 * 1024;
@@ -46,22 +47,34 @@ where
     pub(crate) fn new(config: RollupDbConfig) -> anyhow::Result<Self> {
         let path = config.path.clone();
         let state_cache_size = config.state_cache_size.unwrap_or(GIGABYTE);
-        let separate_archival_state = config.separate_archival_state;
-        let state_db = NomtStateDb::<H>::new(config)?;
-        let accessory_rocksdb =
-            AccessoryDb::get_rockbound_options().default_setup_db_in_path(&path)?;
-        let ledger_rocksdb = LedgerDb::get_rockbound_options().default_setup_db_in_path(&path)?;
-        let flat_state = FlatStateDb::new(path, state_cache_size, separate_archival_state)?;
+
+        let merklized_state = Arc::new(NomtStateDb::<H>::new(config)?);
+        let flat_state = FlatStateDb::new(path.clone(), state_cache_size)?;
+        let ledger = Arc::new(LedgerDb::get_rockbound_options().default_setup_db_in_path(&path)?);
+
+        let accessory =
+            Arc::new(AccessoryDb::get_rockbound_options().default_setup_db_in_path(&path)?);
+
+        // Validate the commit state.
+        Self::validate_commit_flag_and_rollback_if_necessary(
+            &merklized_state,
+            ledger.clone(),
+            accessory.clone(),
+            &flat_state,
+        )?;
+
         Ok(Self {
-            merklized_state: Arc::new(state_db),
+            merklized_state,
             flat_state,
-            accessory: Arc::new(accessory_rocksdb),
-            ledger: Arc::new(ledger_rocksdb),
+            accessory,
+            ledger,
             phantom_ref: Default::default(),
         })
     }
 
     pub(crate) fn commit(&mut self, group: CommitGroup) -> anyhow::Result<()> {
+        tracing::trace!("Commiting a group...");
+        // The last commit had to be successful.
         let CommitGroup {
             nomt: state,
             rockbound:
@@ -72,23 +85,29 @@ where
                 },
         } = group;
 
-        let merklized_start = std::time::Instant::now();
-        // Note: failure handling and data recovery will be implemented later.
+        // NOMT
+        tracing::trace!("Commiting NOMT DBs...");
         let merklized_commit = self.merklized_state.commit(state)?;
-        let merklized_commit_from_caller = merklized_start.elapsed();
-        // Historical data is committed after merklized state, as in case of failure, it can be synced from the normal state,
-        // as it duplicates the last written data to `self.state`.
+
+        // Ledger
+        tracing::trace!("Committing Ledger DB...");
+        #[cfg(feature = "test-utils")]
+        crate::test_utils::CrashLocation::BeforeCommittingLedger.crash_if_env_set();
+        let ledger_commit = self.commit_ledger(&ledger)?;
+
+        // Accessory
+        tracing::trace!("Commiting Accessory DB...");
+        #[cfg(feature = "test-utils")]
+        crate::test_utils::CrashLocation::BeforeCommittingAccessory.crash_if_env_set();
+        let accessory_commit =
+            self.commit_accessory(&accessory, &historical_state.root_hash_batch)?;
+
+        // Flat State
+        tracing::trace!("Committing Flat DB..");
         let flat_metrics = self.flat_state.commit(historical_state)?;
-        let accessory_start = std::time::Instant::now();
-        self.accessory.write_schemas(&accessory)?;
-        let accessory_commit = accessory_start.elapsed();
 
-        let ledger_start = std::time::Instant::now();
-        // Ledger goes after last, as its data is used during the start.
-        // So if ledger save failed, state and accessory will be synced from DA
-        self.ledger.write_schemas(&ledger)?;
-        let ledger_commit = ledger_start.elapsed();
-
+        // Metrics
+        let merklized_commit_from_caller = merklized_commit.total;
         let commit_detailed_metrics = CommitDetailedMetric {
             merklized_commit,
             merklized_commit_from_caller,
@@ -96,14 +115,74 @@ where
             accessory_commit,
             ledger_commit,
         };
-
         sov_metrics::track_metrics(|tracker| {
             tracker.submit(commit_detailed_metrics);
         });
-
         self.merklized_state.send_metrics();
 
         Ok(())
+    }
+
+    fn validate_commit_flag_and_rollback_if_necessary(
+        merklized_state: &NomtStateDb<H>,
+        ledger_db: Arc<rockbound::DB>,
+        accessory_db: Arc<rockbound::DB>,
+        flat_state_db: &FlatStateDb,
+    ) -> anyhow::Result<()> {
+        let state_roots = AllDBsStateRoots::from_dbs(
+            merklized_state,
+            ledger_db.clone(),
+            accessory_db.clone(),
+            flat_state_db,
+        )?;
+
+        state_roots.info("before validation");
+
+        if state_roots.is_kernel_nomt_root_newer() {
+            merklized_state.kernel.rollback(1)?;
+        }
+
+        if state_roots.is_user_nomt_root_newer() {
+            merklized_state.user.rollback(1)?;
+        }
+
+        if state_roots.is_ledger_db_root_newer() {
+            LedgerDb::rollback_head_slot(ledger_db.clone())?;
+        }
+
+        if state_roots.is_accessory_db_root_newer() {
+            AccessoryDb::rollback(accessory_db.clone())?;
+        }
+
+        if state_roots.is_archival_db_root_newer() {
+            flat_state_db.validate_and_rollback_archival()?;
+        }
+
+        let state_roots =
+            AllDBsStateRoots::from_dbs(merklized_state, ledger_db, accessory_db, flat_state_db)?;
+        state_roots.info("after validation");
+
+        state_roots.check_all();
+
+        Ok(())
+    }
+
+    fn commit_accessory(
+        &self,
+        accessory: &SchemaBatch,
+        root_hash_batch: &SchemaBatch,
+    ) -> anyhow::Result<Duration> {
+        let accessory_start = std::time::Instant::now();
+        AccessoryDb::commit(&self.accessory, accessory, root_hash_batch)?;
+        Ok(accessory_start.elapsed())
+    }
+
+    fn commit_ledger(&self, ledger: &SchemaBatch) -> anyhow::Result<Duration> {
+        let ledger_start = std::time::Instant::now();
+        // Ledger goes after last, as its data is used during the start.
+        // So if ledger save failed, state and accessory will be synced from DA
+        self.ledger.write_schemas(ledger)?;
+        Ok(ledger_start.elapsed())
     }
 
     // Flush pruning schema batches to disk.
@@ -122,7 +201,7 @@ where
         relevant_snapshot_refs: Vec<K>,
         rockbound_snapshots: &HashMap<K, SnapshotGroup>,
         nomt_snapshots: Arc<RwLock<HashMap<K, StateOverlay>>>,
-        pinned_cache: Option<Box<(dyn Any + Send + Sync)>>,
+        pinned_cache: Option<Box<dyn Any + Send + Sync>>,
         with_witness: bool,
     ) -> anyhow::Result<(S, DeltaReader)> {
         let mut historical_state_snapshots = Vec::with_capacity(relevant_snapshot_refs.len());
@@ -152,7 +231,10 @@ where
         );
         let historical_state_reader =
             DeltaReader::new(self.flat_state.live_db.clone(), historical_state_snapshots);
-        let version = self.flat_state.get_kernel_db().get_committed_version()?;
+        let version = self
+            .flat_state
+            .latest_version_and_root_hash_live_db()?
+            .map(|(v, _)| v);
 
         let user_state_reader =
             VersionedDeltaReader::<NomtStateValues<UserNamespace>, DbCache>::new(
@@ -166,6 +248,7 @@ where
                 version,
                 kernel_state_snapshots,
             );
+
         let historical_state_mapper = HistoricalStateReader::new(
             user_state_reader,
             kernel_state_reader,
@@ -222,7 +305,7 @@ where
                 //         keys_to_prune += 1;
                 //         keys_inspected += 1;
                 //         // Prune the historical state table. This is the main table that we want to prune.
-                //         // We want to make sure that the the newest version of the key is accessible. The pruning table
+                //         // We want to make sure that the newest version of the key is accessible. The pruning table
                 //         // records that we wrote key K at time T, so delete key K at time T-1. Recursively, this will ensure
                 //         // that no keys are pruned that are still live, and all old keys are pruned as soon as possible.
                 //         let mut key = key.into_versioned_key();
@@ -309,63 +392,7 @@ where
             accessory_state,
         }
     }
-
-    fn are_root_hashes_match(&self) -> anyhow::Result<bool> {
-        let historical_state_delta_reader =
-            DeltaReader::new(self.flat_state.live_db.clone(), Vec::new());
-
-        let nomt_root_hashes = self.merklized_state.get_root_hashes();
-        let last_version =
-            HistoricalStateReader::last_version_from_reader(&historical_state_delta_reader)?;
-
-        match last_version {
-            None => {
-                let is_kernel_empty = nomt_root_hashes.kernel.is_empty();
-                let is_user_empty = nomt_root_hashes.user.is_empty();
-                tracing::trace!(
-                    ?is_kernel_empty,
-                    ?is_user_empty,
-                    "Historical root hash is empty, user and kernel must be too"
-                );
-                Ok(is_kernel_empty && is_user_empty)
-            }
-            Some(latest_version) => {
-                let Some(state_root_rocksdb) =
-                    HistoricalStateReader::get_serialized_root_hash_from_reader(
-                        &historical_state_delta_reader,
-                        latest_version,
-                    )?
-                else {
-                    anyhow::bail!(
-                        "Missing root hash for the latest version {}",
-                        latest_version
-                    );
-                };
-                tracing::trace!(
-                    histrocial_root_hash = %hex::encode(&state_root_rocksdb),
-                    nomt_state_roots = ?nomt_root_hashes,
-                    %latest_version,
-                    "Historical root hash is not empty");
-                Ok(nomt_root_hashes.included_in_raw(&state_root_rocksdb))
-            }
-        }
-    }
-
-    pub(crate) fn verify_and_fix_commited_root_hashes(&self) -> anyhow::Result<()> {
-        if !self.are_root_hashes_match()? {
-            tracing::warn!("Historical state root hashes are not equal to NOMT state root hashes, attempt to fix it");
-            self.merklized_state.full_rollback()?;
-            if !self.are_root_hashes_match()? {
-                return Err(anyhow::anyhow!("Fix didn't help, historical state root hashes are not equal to NOMT state root hashes. Manual intervention is required."));
-            }
-            tracing::info!(
-                "Historical state root hashes are equal to NOMT state root hashes, fix applied"
-            );
-        }
-        Ok(())
-    }
 }
-
 pub(crate) struct SnapshotGroup {
     pub(crate) historical_state: StateChanges,
     pub(crate) accessory: Arc<SchemaBatch>,
@@ -425,5 +452,153 @@ impl PrunerJob {
             historical_state,
             accessory: accessory_state,
         })
+    }
+}
+
+// Root hash for empty nomt state.
+fn pre_genesis_root() -> [u8; 64] {
+    let mut pre_genesis_root = [0u8; 64];
+    pre_genesis_root[..32].copy_from_slice(&nomt::trie::TERMINATOR);
+    pre_genesis_root[32..].copy_from_slice(&nomt::trie::TERMINATOR);
+    pre_genesis_root
+}
+
+struct AllDBsStateRoots {
+    // The `live_db` is committed last. We can use `root_hash_from_live_db` to verify
+    // whether all other databases were committed in the previous run.
+    root_hash_from_live_db: [u8; 64],
+    root_hash_from_archival_db: [u8; 64],
+    root_hash_from_accessory_db: [u8; 64],
+    root_hash_from_ledger_db: [u8; 64],
+    root_hash_nomt: StateRootHashes,
+}
+
+impl AllDBsStateRoots {
+    fn from_dbs<H: digest::Digest<OutputSize = digest::typenum::U32> + Send + Sync>(
+        merklized_state: &NomtStateDb<H>,
+        ledger_db: Arc<rockbound::DB>,
+        accessory_db: Arc<rockbound::DB>,
+        flat_state_db: &FlatStateDb,
+    ) -> anyhow::Result<AllDBsStateRoots> {
+        let root_hash_nomt = merklized_state.get_root_hashes();
+
+        let root_hash_from_live_db = match flat_state_db.root_hash_from_live_db()? {
+            Some(root_hash_from_live_db) => root_hash_from_live_db,
+            None => {
+                // The merklized_state is committed first:
+                // root_hash_from_live_db == None and root_hash_nomt is empty. This indicates that the rollup is being run for the first time.
+                if root_hash_nomt.is_empty() {
+                    pre_genesis_root()
+                } else {
+                    // root_hash_nomt is not empty but root_hash_from_live_db is empty.
+                    // This means that the rollup ran before for the first time but crashed before saving the live DB.
+                    //
+                    // In this case, we should manually remove all databases and start again.
+                    // This happens only in the following scenario:
+                    // 1. The rollup started from genesis.
+                    // 2. It crashed before finishing the first commit, and the live DB was not saved.
+                    //
+                    // In this case, it is safe to delete all the databases.
+                    tracing::error!(
+                        "Rollup instantiation error: Delete the rollup databases and start again."
+                    );
+                    anyhow::bail!(
+                        "Live db not found. Delete the rollup databases and start again."
+                    );
+                }
+            }
+        };
+
+        let root_hash_from_archival_db = flat_state_db
+            .root_hash_from_archival_db()?
+            .unwrap_or_else(pre_genesis_root);
+
+        let root_hash_from_ledger_db =
+            LedgerDb::get_head_root_hash(ledger_db.clone())?.unwrap_or_else(pre_genesis_root);
+
+        let root_hash_from_accessory_db =
+            AccessoryDb::latest_version_and_root_hash_archival_db(accessory_db)?
+                .map(|(_, r)| r)
+                .unwrap_or_else(pre_genesis_root);
+
+        Ok(AllDBsStateRoots {
+            root_hash_from_live_db,
+            root_hash_from_archival_db,
+            root_hash_from_accessory_db,
+            root_hash_from_ledger_db,
+            root_hash_nomt,
+        })
+    }
+
+    fn is_kernel_nomt_root_newer(&self) -> bool {
+        self.root_hash_nomt.kernel != self.root_hash_from_live_db[32..]
+    }
+
+    fn is_user_nomt_root_newer(&self) -> bool {
+        self.root_hash_nomt.user != self.root_hash_from_live_db[0..32]
+    }
+
+    fn is_ledger_db_root_newer(&self) -> bool {
+        self.root_hash_from_ledger_db != self.root_hash_from_live_db
+    }
+
+    fn is_accessory_db_root_newer(&self) -> bool {
+        self.root_hash_from_accessory_db != self.root_hash_from_live_db
+    }
+
+    fn is_archival_db_root_newer(&self) -> bool {
+        self.root_hash_from_archival_db != self.root_hash_from_live_db
+    }
+
+    fn check_all(&self) {
+        Self::check_hashes(
+            &self.root_hash_from_archival_db,
+            "root_hash_from_archival_db",
+            &self.root_hash_from_live_db,
+        );
+
+        Self::check_hashes(
+            &self.root_hash_from_accessory_db,
+            "root_hash_from_accessory_db",
+            &self.root_hash_from_live_db,
+        );
+
+        Self::check_hashes(
+            &self.root_hash_from_ledger_db,
+            "root_hash_from_ledger_db",
+            &self.root_hash_from_live_db,
+        );
+
+        Self::check_hashes(
+            &self.root_hash_nomt.user,
+            "self.root_hash_nomt.user",
+            &self.root_hash_from_live_db[0..32],
+        );
+
+        Self::check_hashes(
+            &self.root_hash_nomt.kernel,
+            "self.root_hash_nomt.kernel",
+            &self.root_hash_from_live_db[32..],
+        );
+    }
+
+    fn check_hashes(root_hash: &[u8], root_hash_name: &str, root_hash_from_live_db: &[u8]) {
+        let root_hash = hex::encode(root_hash);
+        let root_hash_from_live_db = hex::encode(root_hash_from_live_db);
+
+        if root_hash != root_hash_from_live_db {
+            panic!("{root_hash_name}: {root_hash} does not match root_hash_from_live_db: {root_hash_from_live_db}");
+        }
+    }
+
+    fn info(&self, msg: &str) {
+        tracing::info!(
+            root_hash_from_live_db = hex::encode(self.root_hash_from_live_db),
+            root_hash_from_archival_db = hex::encode(self.root_hash_from_archival_db),
+            root_hash_from_ledger_db = hex::encode(self.root_hash_from_ledger_db),
+            root_hash_nomt_user = hex::encode(self.root_hash_nomt.user),
+            root_hash_nomt_kernel = hex::encode(self.root_hash_nomt.kernel),
+            "State roots on startup {msg}"
+        );
     }
 }

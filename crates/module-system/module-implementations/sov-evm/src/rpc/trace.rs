@@ -57,6 +57,7 @@ where
         EthApiError,
     > {
         // Get the block - could be pending or sealed
+        // TODO(low priority): Skip fetching the whole block; we just need the block number
         let maybe_block = self
             .get_maybe_sealed_block(block_number, state)
             .ok_or_else(|| EthApiError::HeaderNotFound(BlockId::number(block_number)))?;
@@ -64,17 +65,18 @@ where
         // Pre-load transactions to avoid borrow conflicts
         let transactions = self.preload_block_transactions(&maybe_block, state)?;
 
-        let is_pending = matches!(maybe_block, MaybeSealedBlock::Pending(_));
+        let is_pending = matches!(maybe_block, MaybeSealedBlock::PendingSynthetic(_));
 
         let mut maybe_archival_state: MaybeArchivalState<'a, S> = if is_pending {
-            state.into()
+            MaybeArchivalState::Current(state)
         } else {
             let archival = self.archival_state_pre_block(maybe_block.number(), state)?;
-            Box::new(archival).into()
+            MaybeArchivalState::Archival(Box::new(archival))
         };
         let state = maybe_archival_state.deref_mut();
 
-        let block_env = self.block_env(state)?;
+        let mut block_env = self.block_env(state)?;
+        block_env.basefee = 0; // Set the base fee to zero for evm execution. Gas is paid for by the sov gas meter instead
         let cfg = self.cfg(state)?;
         let cfg_env = get_cfg_env(&block_env, &cfg, None);
 

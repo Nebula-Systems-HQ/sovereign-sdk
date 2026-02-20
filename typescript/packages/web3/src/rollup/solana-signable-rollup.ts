@@ -1,6 +1,5 @@
 import type SovereignClient from "@sovereign-sdk/client";
-import type { Signer } from "@sovereign-sdk/signers";
-import { LedgerSolanaSigner } from "@sovereign-sdk/signers";
+import { type Signer, isLedgerSolanaSigner } from "@sovereign-sdk/signers";
 import type { Transaction, UnsignedTransaction } from "@sovereign-sdk/types";
 import { Base64 } from "js-base64";
 import type { Subscription, SubscriptionToCallbackMap } from "../subscriptions";
@@ -14,17 +13,10 @@ import {
   standardTypeBuilder,
 } from "./standard-rollup";
 
-export type SolanaOffchainUnsignedTransaction<RuntimeCall> = {
-  runtime_call: RuntimeCall;
-  uniqueness: { nonce: number } | { generation: number };
-  details: {
-    max_priority_fee_bips: number;
-    max_fee: string;
-    gas_limit: number[] | null;
-    chain_id: number;
+export type SolanaOffchainUnsignedTransaction<RuntimeCall> =
+  UnsignedTransaction<RuntimeCall> & {
+    chain_name: string;
   };
-  chain_name: string;
-};
 
 export type SolanaOffchainSimpleMessage = {
   signed_message: Uint8Array;
@@ -121,7 +113,7 @@ export class SolanaSignableRollup<RuntimeCall> {
    * and "solanaSimple" for software signers.
    */
   private getAutoAuthenticator(signer: Signer): "solana" | "solanaSimple" {
-    return signer instanceof LedgerSolanaSigner ? "solana" : "solanaSimple";
+    return isLedgerSolanaSigner(signer) ? "solana" : "solanaSimple";
   }
 
   /**
@@ -133,7 +125,8 @@ export class SolanaSignableRollup<RuntimeCall> {
     return await this.inner.http.post<SovereignClient.Sequencer.TxCreateResponse>(
       this.solanaEndpoint,
       {
-        body: Base64.fromUint8Array(serializedMessage),
+        // Match AcceptTx shape used by standard sequencer endpoints.
+        body: { body: Base64.fromUint8Array(serializedMessage) },
       },
     );
   }
@@ -198,7 +191,7 @@ export class SolanaSignableRollup<RuntimeCall> {
   ): Promise<Uint8Array> {
     const serializer = await this.inner.serializer();
     const schema = serializer.schema;
-    const chainName = schema.chain_name || "";
+    const chainName = schema.chain_data.chain_name || "";
 
     const solanaUnsignedTx: SolanaOffchainUnsignedTransaction<RuntimeCall> = {
       runtime_call: unsignedTx.runtime_call,

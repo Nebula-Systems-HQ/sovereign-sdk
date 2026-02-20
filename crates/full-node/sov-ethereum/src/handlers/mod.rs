@@ -1,6 +1,8 @@
 mod get_logs;
 mod subscribe;
 #[cfg(feature = "local")]
+use alloy_eips::BlockId;
+#[cfg(feature = "local")]
 use alloy_eips::Encodable2718;
 #[cfg(feature = "local")]
 use alloy_primitives::Address;
@@ -22,8 +24,8 @@ pub use sov_evm::EthereumAuthenticator;
 use sov_evm::Evm;
 use sov_evm::RlpEvmTransaction;
 use sov_metrics::RpcMetrics;
-use sov_modules_api::capabilities::HasKernel;
 use sov_modules_api::capabilities::TransactionAuthenticator;
+use sov_modules_api::capabilities::{AuthenticationError, FatalError, HasKernel};
 #[cfg(feature = "local")]
 use sov_modules_api::macros::config_value;
 use sov_modules_api::FullyBakedTx;
@@ -42,10 +44,9 @@ use std::time::Instant;
 pub use subscribe::eth_subscribe;
 use tokio::time::timeout;
 
-use crate::to_jsonrpsee_error_object;
 use crate::Ethereum;
+use crate::{rpc_internal_error, rpc_invalid_params, rpc_tx_rejected};
 
-const ETH_RPC_ERROR: &str = "ETH_RPC_ERROR";
 const TIMEOUT_CODE: i32 = 4;
 
 type Receipt = TransactionReceipt<ReceiptEnvelope<LogWithExecutionTimestamp>>;
@@ -89,10 +90,9 @@ where
         let data: Bytes = params.next()?;
         let timeout_ms = params.optional_next::<u64>()?.unwrap_or(MAX_TIMEOUT);
         if timeout_ms > MAX_TIMEOUT {
-            return Err(to_jsonrpsee_error_object(
-                format!("Max allowed timeout is: {MAX_TIMEOUT}"),
-                ETH_RPC_ERROR,
-            ));
+            return Err(rpc_invalid_params(format!(
+                "Max allowed timeout is: {MAX_TIMEOUT}"
+            )));
         }
         let addr = get_peer_ip_addr(extensions)?;
 
@@ -151,10 +151,7 @@ where
 
         let seq = ethereum.sequencer.clone();
         seq.accept_tx(tx, ip_addr).await.map_err(|e| {
-            to_jsonrpsee_error_object(
-                format!("{} - '{}' ({:?})", e.status, e.message, e.details),
-                ETH_RPC_ERROR,
-            )
+            rpc_tx_rejected(format!("{} - '{}' ({:?})", e.status, e.message, e.details))
         })?;
 
         on_success(tx_hash, ethereum)
@@ -169,7 +166,14 @@ where
     fn authenticate_tx(tx: &FullyBakedTx, ethereum: &Arc<Ethereum<S, Seq>>) -> RpcResult<()> {
         let mut state = ethereum.api_state_accessor().to_provable_reader();
         let _ = <Seq::Rt as Runtime<S>>::Auth::authenticate(tx, &mut state).map_err(|e| {
-            to_jsonrpsee_error_object(format!("Authentication failed: {e}"), ETH_RPC_ERROR)
+            if let AuthenticationError::FatalError(FatalError::DeserializationFailed(err_msg), _) =
+                &e
+            {
+                if err_msg.contains("Only EIP1559") {
+                    return rpc_tx_rejected(format!("transaction type not supported: {err_msg}"));
+                }
+            };
+            rpc_invalid_params(format!("Authentication failed: {e}"))
         })?;
         Ok(())
     }
@@ -197,14 +201,11 @@ where
         // get from, return error if none
         let from = transaction_request
             .from
-            .ok_or(to_jsonrpsee_error_object("No from address", ETH_RPC_ERROR))?;
+            .ok_or_else(|| rpc_invalid_params("No from address"))?;
 
         // return error if not in signers
         if !ethereum.eth_signer.addresses().contains(&from) {
-            return Err(to_jsonrpsee_error_object(
-                "From address not in signers",
-                ETH_RPC_ERROR,
-            ));
+            return Err(rpc_invalid_params("From address not in signers"));
         }
 
         let raw_evm_tx = {
@@ -226,7 +227,7 @@ where
 
             let estimated_gas = evm.eth_estimate_gas(
                 transaction_request.clone(),
-                Some("pending".to_string()),
+                Some(BlockId::pending()),
                 &mut state,
             )?;
             transaction_request.gas = Some(estimated_gas.to::<u64>());
@@ -246,15 +247,13 @@ where
             let signed_tx = ethereum
                 .eth_signer
                 .sign_transaction(transaction, &from)
-                .map_err(|e| to_jsonrpsee_error_object(e, ETH_RPC_ERROR))?;
+                .map_err(rpc_internal_error)?;
 
             RlpEvmTransaction {
                 rlp: signed_tx.encoded_2718(),
             }
         };
-        let (tx_hash, raw_message) = ethereum
-            .make_raw_tx(raw_evm_tx)
-            .map_err(|e| to_jsonrpsee_error_object(e, ETH_RPC_ERROR))?;
+        let (tx_hash, raw_message) = ethereum.make_raw_tx(raw_evm_tx)?;
 
         let tx = Seq::Rt::encode_with_ethereum_auth(RawTx::new(raw_message));
 
@@ -263,10 +262,7 @@ where
             .accept_tx(tx, ip_addr)
             .await
             .map_err(|e| {
-                to_jsonrpsee_error_object(
-                    format!("{} - '{}' ({:?})", e.status, e.message, e.details),
-                    ETH_RPC_ERROR,
-                )
+                rpc_tx_rejected(format!("{} - '{}' ({:?})", e.status, e.message, e.details))
             })?;
 
         Ok(tx_hash)
@@ -292,14 +288,14 @@ fn get_peer_ip_addr(extensions: Extensions) -> Result<IpAddr, ErrorObjectOwned> 
     // The `SocketAddr`` was injected into the request extensions by specific middleware in `axum::serve`.
     let ip_result = extensions.get::<GetIPResult>().ok_or_else(|| {
         tracing::error!("Axum Extensions map does not contain GetIPResult");
-        to_jsonrpsee_error_object(IP_ADDRESS_ERROR, ETH_RPC_ERROR)
+        rpc_internal_error(IP_ADDRESS_ERROR)
     })?;
 
     match ip_result.maybe_ip.as_ref() {
         Ok(ok) => Ok(*ok),
         Err(err) => {
             let err_msg = format!("IP address error: {err:?}");
-            Err(to_jsonrpsee_error_object(err_msg, ETH_RPC_ERROR))
+            Err(rpc_internal_error(err_msg))
         }
     }
 }

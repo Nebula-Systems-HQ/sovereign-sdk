@@ -14,7 +14,7 @@ use crate::schema::tables::StateRootHashes;
 use crate::schema::types::slot_key::{SlotKey, SlotValue};
 use crate::schema::types::StateRootHashId;
 
-const STATE_ROOT_HASH_SINGLETON: StateRootHashId = StateRootHashId(0);
+pub(crate) const STATE_ROOT_HASH_SINGLETON: StateRootHashId = StateRootHashId(0);
 
 type KvPair = (SlotKey, Option<SlotValue>);
 
@@ -34,7 +34,7 @@ pub struct HistoricalStateReader {
 }
 
 /// A collection of changes to the state db. Includes versioned changes to user/kernel state, and a plain schema batch of changes to any other columns.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct StateChanges {
     pub(crate) user: Arc<VersionedSchemaBatch<NomtStateValues<UserNamespace>>>,
     pub(crate) kernel: Arc<VersionedSchemaBatch<NomtStateValues<KernelNamespace>>>,
@@ -45,16 +45,14 @@ impl HistoricalStateReader {
     // Used for testing only.
     #[cfg(test)]
     fn new_empty(flat_state: &crate::storage_manager::FlatStateDb) -> Self {
-        let kernel_version = flat_state.get_kernel_db().get_committed_version().unwrap();
-        let user_version = flat_state.get_user_db().get_committed_version().unwrap();
-        assert_eq!(
-            kernel_version, user_version,
-            "Kernel and user should always have the same latest version"
-        );
-        let kernel =
-            VersionedDeltaReader::new(flat_state.get_kernel_db().clone(), kernel_version, vec![]);
-        let user =
-            VersionedDeltaReader::new(flat_state.get_user_db().clone(), user_version, vec![]);
+        let version = flat_state
+            .latest_version_and_root_hash_live_db()
+            .unwrap()
+            .map(|(v, _)| v);
+
+        let kernel = VersionedDeltaReader::new(flat_state.get_kernel_db().clone(), version, vec![]);
+        let user = VersionedDeltaReader::new(flat_state.get_user_db().clone(), version, vec![]);
+
         let root_hash_reader = DeltaReader::new(flat_state.get_db(), vec![]);
         let next_version = match user.latest_version() {
             Some(latest_version) => SlotNumber::new(
@@ -221,6 +219,35 @@ impl HistoricalStateReader {
         version: SlotNumber,
     ) -> anyhow::Result<StateChanges> {
         let mut root_hash_batch = SchemaBatch::default();
+
+        let (user_batch, kernel_batch) =
+            Self::materialize_user_and_kernel_values(user_changes, kernel_changes)?;
+
+        tracing::trace!(
+            %version,
+            root_hash = %hex::encode(&root_hash),
+            "Materialized root hash"
+        );
+
+        root_hash_batch
+            .put::<StateRootHashes>(&(version, STATE_ROOT_HASH_SINGLETON), &root_hash)?;
+
+        Ok(StateChanges {
+            user: Arc::new(user_batch),
+            kernel: Arc::new(kernel_batch),
+            root_hash_batch: Arc::new(root_hash_batch),
+        })
+    }
+
+    /// Collects a sequence of key-value pairs into [`SchemaBatch`] for user & kernel changes.
+    #[allow(clippy::type_complexity)]
+    pub fn materialize_user_and_kernel_values(
+        user_changes: impl IntoIterator<Item = (SlotKey, Option<SlotValue>)>,
+        kernel_changes: impl IntoIterator<Item = (SlotKey, Option<SlotValue>)>,
+    ) -> anyhow::Result<(
+        VersionedSchemaBatch<NomtStateValues<UserNamespace>>,
+        VersionedSchemaBatch<NomtStateValues<KernelNamespace>>,
+    )> {
         let mut has_kernel_been_updated = false;
         let mut has_user_been_updated = false;
         let mut metric = StateMaterializationMetrics::new();
@@ -255,23 +282,11 @@ impl HistoricalStateReader {
             );
         }
 
-        tracing::trace!(
-            %version,
-            root_hash = %hex::encode(&root_hash),
-            "Materialized root hash"
-        );
-        root_hash_batch
-            .put::<StateRootHashes>(&(version, STATE_ROOT_HASH_SINGLETON), &root_hash)?;
-
         sov_metrics::track_metrics(|tracker| {
             tracker.submit(metric);
         });
 
-        Ok(StateChanges {
-            user: Arc::new(user_batch),
-            kernel: Arc::new(kernel_batch),
-            root_hash_batch: Arc::new(root_hash_batch),
-        })
+        Ok((user_batch, kernel_batch))
     }
 }
 
@@ -283,7 +298,8 @@ mod tests {
     #[test]
     fn verify_last_version_bumped_properly() {
         let tempdir = tempfile::tempdir().unwrap();
-        let rocksdb = FlatStateDb::new(tempdir.path().to_path_buf(), 1_000_000, true).unwrap(); // Use a 1MB state cache for tests
+        let db_path = tempdir.path();
+        let rocksdb = FlatStateDb::new(db_path.to_path_buf(), 1_000_000).unwrap(); // Use a 1MB state cache for tests
 
         let key1 = b"AAA";
         let key2 = b"BBB";
@@ -300,7 +316,7 @@ mod tests {
             assert_eq!(slot_number.checked_sub(1), historical_state.last_version());
             assert_eq!(slot_number, historical_state.get_next_version());
 
-            let root_hash = idx.to_be_bytes().to_vec();
+            let root_hash = [idx as u8; 64].to_vec();
 
             let changes = HistoricalStateReader::materialize_values(
                 vec![],
@@ -317,7 +333,7 @@ mod tests {
     fn test_no_bound_on_passed_version() {
         let tempdir = tempfile::tempdir().unwrap();
         let db_path = tempdir.path();
-        let rocksdb = FlatStateDb::new(db_path.to_path_buf(), 1_000_000, true).unwrap(); // Use a 1MB state cache for tests
+        let rocksdb = FlatStateDb::new(db_path.to_path_buf(), 1_000_000).unwrap(); // Use a 1MB state cache for tests
 
         // Create two independent readers on the same database.
         let reader1 = HistoricalStateReader::new_empty(&rocksdb);
@@ -328,7 +344,7 @@ mod tests {
         assert_eq!(reader1.get_next_version(), version0);
         assert_eq!(reader2.get_next_version(), version0);
 
-        let root_hash0 = vec![1; 32];
+        let root_hash0 = vec![1; 64];
         let changes0 = HistoricalStateReader::materialize_values(
             vec![],
             vec![(
@@ -355,7 +371,7 @@ mod tests {
 
         // --- Second set of changes (version 1) ---
         let version1 = SlotNumber::new(1);
-        let root_hash1 = vec![2; 32];
+        let root_hash1 = vec![2; 64];
         let changes1 = HistoricalStateReader::materialize_values(
             vec![],
             vec![(
@@ -394,7 +410,8 @@ mod tests {
     #[test]
     fn test_unbound_last_version() {
         let tempdir = tempfile::tempdir().unwrap();
-        let rocksdb = FlatStateDb::new(tempdir.path().to_path_buf(), 1_000_000, true).unwrap(); // Use a 1MB state cache for tests
+        let db_path = tempdir.path();
+        let rocksdb = FlatStateDb::new(db_path.to_path_buf(), 1_000_000).unwrap(); // Use a 1MB state cache for tests
 
         let reader1 = HistoricalStateReader::new_empty(&rocksdb);
         let reader2 = HistoricalStateReader::new_empty(&rocksdb);
@@ -413,7 +430,7 @@ mod tests {
                 SlotKey::from_slice(b"key1"),
                 Some(b"value1".to_vec().into()),
             )],
-            vec![1; 32],
+            vec![1; 64],
             version0,
         )
         .unwrap();
@@ -435,7 +452,7 @@ mod tests {
                 SlotKey::from_slice(b"key2"),
                 Some(b"value2".to_vec().into()),
             )],
-            vec![2; 32],
+            vec![2; 64],
             version1,
         )
         .unwrap();

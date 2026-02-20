@@ -4,7 +4,8 @@ mod tests;
 pub use crate::config::CelestiaConfig;
 use crate::metrics::client::{
     BlobGetAllMeasurement, GetBlockHeaderMeasurement, GetChainHeadMeasurement,
-    GetNamespaceDataMeasurement, SubmitPayForBlob,
+    GetNamespaceDataMeasurement, HeaderSyncStateMeasurement, StateBalanceForAddressMeasurement,
+    StateEstimateGasPriceMeasurement, SubmitPayForBlob,
 };
 use crate::metrics::full::{
     BlobSubmitMeasurement, CelestiaAdapterStateMeasurement, GetBlockMeasurement,
@@ -23,8 +24,8 @@ use anyhow::Context;
 use async_trait::async_trait;
 use backon::ExponentialBuilder;
 use celestia_types::blob::Blob as JsonBlob;
+use celestia_types::namespace_data::NamespaceData;
 use celestia_types::nmt::Namespace;
-use celestia_types::row_namespace_data::NamespaceData;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use sov_rollup_interface::common::HexHash;
@@ -50,6 +51,7 @@ pub struct CelestiaService {
     backoff_policy: ExponentialBuilder,
     request_timeout: Duration,
     tx_priority: celestia_client::tx::TxPriority,
+    tx_status_polling_millis: u64,
 }
 
 impl CelestiaService {
@@ -62,6 +64,7 @@ impl CelestiaService {
         backoff_policy: ExponentialBuilder,
         request_timeout: Duration,
         tx_priority: celestia_client::tx::TxPriority,
+        tx_status_polling_millis: u64,
     ) -> Self {
         Self {
             client: Arc::new(client),
@@ -72,6 +75,7 @@ impl CelestiaService {
             backoff_policy,
             request_timeout,
             tx_priority,
+            tx_status_polling_millis,
         }
     }
 
@@ -87,7 +91,9 @@ impl CelestiaService {
 
     fn get_tx_config(&self) -> celestia_client::tx::TxConfig {
         let mut tx_config = celestia_client::tx::TxConfig::default();
-        tx_config = tx_config.with_priority(self.tx_priority);
+        tx_config = tx_config
+            .with_priority(self.tx_priority)
+            .with_confirmation_interval_ms(self.tx_status_polling_millis);
         tx_config
     }
 
@@ -158,7 +164,7 @@ impl CelestiaService {
 
         let tx_hash = TmHash(tx_response.hash);
         tracing::info!(
-            da_height = tx_response.height.value(),
+            da_height = tx_response.height,
             tx_hash = %tx_hash,
             blob_hash = %blob_hash,
             bytes,
@@ -200,17 +206,26 @@ impl CelestiaService {
         }
 
         let tx_priority = config.tx_priority.clone().into();
-        if let Ok(signer) = client.address() {
-            let bg_client = config
-                .build_client()
-                .await
-                .expect("Failed to build celestia-client for background task");
-            tokio::spawn(stat_collection_task(
-                bg_client,
-                signer,
-                tx_priority,
-                shutdown_receiver,
-            ));
+        if config.background_stat_polling_interval_secs > 0 {
+            if let Ok(signer) = client.address() {
+                let bg_client = config
+                    .build_client()
+                    .await
+                    .expect("Failed to build celestia-client for background task");
+                let stat_polling_period =
+                    Duration::from_secs(config.background_stat_polling_interval_secs);
+                // Background stat collection timeout is 2x the individual API request timeout
+                let stat_request_timeout =
+                    Duration::from_secs(config.api_request_timeout_secs.get() * 2);
+                tokio::spawn(stat_collection_task(
+                    bg_client,
+                    signer,
+                    tx_priority,
+                    shutdown_receiver,
+                    stat_polling_period,
+                    stat_request_timeout,
+                ));
+            }
         }
 
         Self::with_client(
@@ -222,6 +237,7 @@ impl CelestiaService {
             backoff_policy,
             request_timeout,
             tx_priority,
+            config.tx_status_polling_millis,
         )
     }
 }
@@ -251,6 +267,12 @@ impl CelestiaService {
             tracker.submit(GetBlockHeaderMeasurement::new(response_time, is_success));
         });
         let extended_header = flatten_timeout(result)?;
+        if extended_header.header.height.value() != height {
+            return Err(MaybeRetryable::Transient(anyhow::anyhow!(
+                "Received wrong height {}, when requested {height}",
+                extended_header.header.height.value()
+            )));
+        }
         Ok(extended_header.into())
     }
 
@@ -265,7 +287,9 @@ impl CelestiaService {
         tracing::trace!(height, %ns, "Making call to share.GetNamespaceData");
         let result = tokio::time::timeout(
             self.request_timeout,
-            client.share().get_namespace_data(height, namespace),
+            client
+                .share()
+                .get_namespace_data(height, APP_VERSION, namespace),
         )
         .await;
         let is_success = matches!(result, Ok(Ok(_)));
@@ -523,6 +547,10 @@ impl DaService for CelestiaService {
     async fn get_signer(&self) -> Option<<Self::Spec as DaSpec>::Address> {
         self.signer_address
     }
+
+    async fn get_approximate_block_time(&self) -> Duration {
+        std::time::Duration::from_secs(6)
+    }
 }
 
 pub(crate) fn extract_relevant_blobs(
@@ -589,9 +617,10 @@ async fn stat_collection_task(
     signer: celestia_types::state::AccAddress,
     priority: celestia_client::tx::TxPriority,
     mut shutdown_receiver: tokio::sync::watch::Receiver<()>,
+    period: Duration,
+    request_timeout: Duration,
 ) {
     let chain_id = client.chain_id();
-    let period = Duration::from_secs(30);
     tracing::info!(%chain_id, ?period, "Starting celestia stat collection task");
 
     let mut interval = tokio::time::interval(period);
@@ -603,7 +632,7 @@ async fn stat_collection_task(
                 return;
             }
             _ = interval.tick() => {
-                match gather_stat(&client, &signer, priority).await {
+                match gather_stat(&client, &signer, priority, request_timeout).await {
                     Ok(measurement) => {
                         sov_metrics::track_metrics(|tracker| {
                             tracker.submit(measurement);
@@ -625,24 +654,47 @@ async fn gather_stat(
     client: &celestia_client::Client,
     signer: &celestia_types::state::AccAddress,
     priority: celestia_client::tx::TxPriority,
+    request_timeout: Duration,
 ) -> anyhow::Result<CelestiaAdapterStateMeasurement> {
-    let balance = client
-        .state()
-        .balance_for_address(signer)
-        .await
-        .context("state.BalanceForAddress")?;
+    // Balance
+    let balance_start = std::time::Instant::now();
+    let balance_response =
+        tokio::time::timeout(request_timeout, client.state().balance_for_address(signer)).await;
+    let response_time = balance_start.elapsed();
+    let is_success = matches!(balance_response, Ok(Ok(_)));
+    sov_metrics::track_metrics(|tracker| {
+        tracker.submit(StateBalanceForAddressMeasurement::new(
+            response_time,
+            is_success,
+        ));
+    });
+    let balance = flatten_timeout::<u64>(balance_response).context("state.BalanceForAddress")?;
 
-    let sync_state = client
-        .header()
-        .sync_state()
-        .await
-        .context("header.SyncState")?;
+    // Sync state
+    let sync_state_start = std::time::Instant::now();
+    let sync_state_response =
+        tokio::time::timeout(request_timeout, client.header().sync_state()).await;
+    let response_time = sync_state_start.elapsed();
+    let is_success = matches!(sync_state_response, Ok(Ok(_)));
+    sov_metrics::track_metrics(|tracker| {
+        tracker.submit(HeaderSyncStateMeasurement::new(response_time, is_success));
+    });
+    let sync_state = flatten_timeout(sync_state_response).context("header.SyncState")?;
     let sync_distance = sync_state.to_height.saturating_sub(sync_state.from_height);
-    let gas_price = client
-        .state()
-        .estimate_gas_price(priority)
-        .await
-        .context("state.EstimateGasPrice")?;
+
+    // Gas price
+    let gas_price_start = std::time::Instant::now();
+    let gas_price_response =
+        tokio::time::timeout(request_timeout, client.state().estimate_gas_price(priority)).await;
+    let response_time = gas_price_start.elapsed();
+    let is_success = matches!(gas_price_response, Ok(Ok(_)));
+    sov_metrics::track_metrics(|tracker| {
+        tracker.submit(StateEstimateGasPriceMeasurement::new(
+            response_time,
+            is_success,
+        ));
+    });
+    let gas_price = flatten_timeout(gas_price_response).context("state.EstimateGasPrice")?;
 
     Ok(CelestiaAdapterStateMeasurement {
         balance,

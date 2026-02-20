@@ -1,6 +1,7 @@
 use crate::helpers::*;
 use crate::runtime::RT;
 use crate::runtime::S;
+use alloy_eips::BlockId;
 use alloy_primitives::FixedBytes;
 use alloy_primitives::Log;
 use alloy_primitives::U256;
@@ -15,7 +16,7 @@ use sov_test_utils::{TransactionTestCase, TEST_DEFAULT_USER_BALANCE};
 
 #[test]
 fn test_simple_transfer() {
-    let (mut runner, from, to) = setup();
+    let (mut runner, from, to, _) = setup();
 
     let value = 1;
     let transfer_tx = create_transfer_tx(0, &from, &to, value).tx;
@@ -38,13 +39,166 @@ fn test_simple_transfer() {
 }
 
 #[test]
+fn test_receipt_fee_matches_balance_delta() {
+    set_receipt_actual_fee_height(0);
+    let (mut runner, from, to, _) = setup();
+    let value = 1u128;
+    let transfer =
+        create_transfer_tx_with_fee_params(0, &from, &to, value, 1_000_000_000, 987_654_321);
+
+    let evm = Evm::<S>::default();
+    runner.execute_transaction(TransactionTestCase {
+        input: transfer.tx,
+        assert: Box::new(move |_ctx, state| {
+            let sender_balance_after = evm.get_balance(from.address(), None, state).unwrap();
+            let receipt = evm
+                .get_transaction_receipt(transfer.hash, state)
+                .unwrap()
+                .expect("receipt should exist");
+
+            let implied_fee =
+                U256::from(receipt.gas_used) * U256::from(receipt.effective_gas_price);
+            let actual_fee = U256::from(TEST_DEFAULT_USER_BALANCE.0)
+                .checked_sub(U256::from(value))
+                .and_then(|balance_after_value| {
+                    balance_after_value.checked_sub(sender_balance_after)
+                })
+                .expect("sender balance should decrease by transfer value and a fee");
+
+            assert!(
+                actual_fee >= implied_fee,
+                "receipt-implied fee cannot exceed actual sender fee",
+            );
+            assert!(
+                actual_fee
+                    .checked_sub(implied_fee)
+                    .expect("validated above")
+                    < U256::from(receipt.gas_used),
+                "difference should be bounded by integer division remainder",
+            );
+        }),
+    });
+}
+
+#[test]
+fn test_block_receipt_fee_matches_balance_delta() {
+    set_receipt_actual_fee_height(0);
+    let (mut runner, from, to, _) = setup();
+    let value = 1u128;
+    let transfer =
+        create_transfer_tx_with_fee_params(0, &from, &to, value, 1_000_000_000, 987_654_321);
+
+    let evm = Evm::<S>::default();
+    runner.execute_transaction(TransactionTestCase {
+        input: transfer.tx,
+        assert: Box::new(move |_ctx, state| {
+            let sender_balance_after = evm.get_balance(from.address(), None, state).unwrap();
+            let receipts = evm
+                .get_block_receipts(Some(BlockId::latest()), state)
+                .unwrap()
+                .expect("latest block receipts should exist");
+            let receipt = receipts
+                .first()
+                .expect("latest block should contain at least one receipt");
+
+            assert_eq!(receipt.transaction_hash, transfer.hash);
+
+            let implied_fee =
+                U256::from(receipt.gas_used) * U256::from(receipt.effective_gas_price);
+            let actual_fee = U256::from(TEST_DEFAULT_USER_BALANCE.0)
+                .checked_sub(U256::from(value))
+                .and_then(|balance_after_value| {
+                    balance_after_value.checked_sub(sender_balance_after)
+                })
+                .expect("sender balance should decrease by transfer value and a fee");
+
+            assert!(
+                actual_fee >= implied_fee,
+                "receipt-implied fee cannot exceed actual sender fee",
+            );
+            assert!(
+                actual_fee
+                    .checked_sub(implied_fee)
+                    .expect("validated above")
+                    < U256::from(receipt.gas_used),
+                "difference should be bounded by integer division remainder",
+            );
+        }),
+    });
+}
+
+#[test]
+fn test_receipt_uses_eip1559_formula_before_activation_height() {
+    set_receipt_actual_fee_height(1_000_000);
+    let (mut runner, from, to, _) = setup();
+    let value = 1u128;
+    let transfer =
+        create_transfer_tx_with_fee_params(0, &from, &to, value, 1_000_000_000, 987_654_321);
+
+    let evm = Evm::<S>::default();
+    runner.execute_transaction(TransactionTestCase {
+        input: transfer.tx,
+        assert: Box::new(move |_ctx, state| {
+            let sender_balance_after = evm.get_balance(from.address(), None, state).unwrap();
+            let receipt = evm
+                .get_transaction_receipt(transfer.hash, state)
+                .unwrap()
+                .expect("receipt should exist");
+
+            let implied_fee =
+                U256::from(receipt.gas_used) * U256::from(receipt.effective_gas_price);
+            let actual_fee = U256::from(TEST_DEFAULT_USER_BALANCE.0)
+                .checked_sub(U256::from(value))
+                .and_then(|balance_after_value| {
+                    balance_after_value.checked_sub(sender_balance_after)
+                })
+                .expect("sender balance should decrease by transfer value and a fee");
+
+            assert_ne!(
+                actual_fee, implied_fee,
+                "before activation height receipts should follow legacy EIP-1559 projection",
+            );
+        }),
+    });
+}
+
+#[test]
+fn test_simple_transfer_balance_larger_than_allowed() {
+    let (mut runner, from, to, _) = setup();
+
+    let transfer_tx = create_transfer_tx(
+        0,
+        &from,
+        &to,
+        TEST_DEFAULT_USER_BALANCE.0.checked_add(1).unwrap(),
+    )
+    .tx;
+
+    let evm = Evm::<S>::default();
+    runner.execute_transaction(TransactionTestCase {
+        input: transfer_tx,
+        assert: Box::new(move |ctx, state| {
+            let mut db = evm.db(state);
+            let from_acc = db.basic(from.address()).unwrap().unwrap();
+            let to_acc = db.basic(to.address()).unwrap().unwrap();
+            // The only balance changes should be from the transfer itself and not from gas as it's disabled in SovEvm
+            assert_eq!(to_acc.balance, 0);
+            assert_eq!(
+                from_acc.balance,
+                TEST_DEFAULT_USER_BALANCE.0 - ctx.gas_value_used.0
+            );
+        }),
+    });
+}
+
+#[test]
 fn test_evm_gas_usage() {
     std::env::set_var(
         "SOV_TEST_CONST_OVERRIDE_DEFAULT_GAS_TO_CHARGE_PER_EVM_GAS",
         "[2, 0]",
     );
     let gas_used_with_evm_metering = {
-        let (mut runner, from, _) = setup();
+        let (mut runner, from, _, _) = setup();
         let contract = LegacySimpleStorage::default();
         let contract_addr = from.address().create(0);
         runner.execute(create_deploy_tx(0, &contract, &from).tx);
@@ -57,7 +211,7 @@ fn test_evm_gas_usage() {
         "[1, 0]",
     );
     let gas_used_without_evm_metering = {
-        let (mut runner, from, _) = setup();
+        let (mut runner, from, _, _) = setup();
         let contract = LegacySimpleStorage::default();
         let contract_addr = from.address().create(0);
         runner.execute(create_deploy_tx(0, &contract, &from).tx);
@@ -70,13 +224,13 @@ fn test_evm_gas_usage() {
             .checked_sub(gas_used_without_evm_metering)
             .unwrap()
             .as_ref(),
-        &[5_251, 0]
+        &[5_318, 0]
     );
 }
 
 #[test]
 fn test_executing_eth_transactions() {
-    let (mut runner, account, _) = setup();
+    let (mut runner, account, _, _) = setup();
     let contract = LegacySimpleStorage::default();
     let contract_addr = account.address().create(0);
 
@@ -137,7 +291,7 @@ fn test_executing_eth_transactions() {
 
 #[test]
 fn test_executing_eth_transactions_several_blocks() {
-    let (mut runner, from, to) = setup();
+    let (mut runner, from, to, _) = setup();
 
     let nb_of_transfers: u64 = 200;
     let batch_size: usize = 10;
@@ -153,7 +307,7 @@ fn test_executing_eth_transactions_several_blocks() {
             assert: Box::new(move |_result, state| {
                 assert_eq!(block.nr, evm.block_number(state).unwrap().to::<u64>());
                 let block_from_evm = evm
-                    .get_block_by_number(Some(format!("{:x}", block.nr)), None, state)
+                    .get_block_by_number(Some(BlockId::number(block.nr)), None, state)
                     .unwrap()
                     .unwrap();
 
@@ -184,6 +338,11 @@ fn test_executing_eth_transactions_several_blocks() {
                     assert_eq!(tx.hash, receipt_from_evm.transaction_hash);
                     assert_eq!(block.nr, receipt_from_evm.block_number.unwrap());
                     assert_eq!(tx_index, receipt_from_evm.transaction_index.unwrap());
+                    assert_eq!(
+                        tx_from_evm.effective_gas_price,
+                        Some(receipt_from_evm.effective_gas_price),
+                        "transaction gas price should match receipt effective gas price",
+                    );
                 }
             }),
         });
@@ -192,7 +351,7 @@ fn test_executing_eth_transactions_several_blocks() {
 
 #[test]
 fn test_failed_tx_doesnt_update_evm_module_state() {
-    let (mut runner, _, no_balance_account) = setup();
+    let (mut runner, _, no_balance_account, _) = setup();
     let contract = LegacySimpleStorage::default();
     let create_contract_tx = create_deploy_tx(0, &contract, &no_balance_account).tx;
 
@@ -209,7 +368,7 @@ fn test_failed_tx_doesnt_update_evm_module_state() {
 
 #[test]
 fn test_account_nonce() {
-    let (mut runner, from, to) = setup();
+    let (mut runner, from, to, _) = setup();
 
     let from_addr = from.address();
     let value = 1;
@@ -241,7 +400,7 @@ fn test_account_nonce() {
 // Check that if the same account deploys two contracts, each deployment results in a unique contract address
 #[test]
 fn test_deploy_many_contracts() {
-    let (mut runner, account, _) = setup();
+    let (mut runner, account, _, _) = setup();
     let contract = LegacySimpleStorage::default();
     let contract_addr_1 = account.address().create(0);
 
@@ -294,7 +453,7 @@ fn test_deploy_many_contracts() {
 
 #[test]
 fn test_evm_logs() {
-    let (mut runner, account, _) = setup();
+    let (mut runner, account, _, _) = setup();
     let contract = LegacySimpleStorage::default();
     let contract_addr = account.address().create(0);
     let address_bytes: [u8; 32] = account.address().into_word().into();
