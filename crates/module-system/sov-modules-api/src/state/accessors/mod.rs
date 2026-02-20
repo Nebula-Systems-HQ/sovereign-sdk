@@ -42,8 +42,8 @@ pub use genesis::GenesisStateAccessor;
 pub use internals::AccessoryDelta;
 pub use kernel::{BootstrapWorkingSet, KernelStateAccessor};
 pub use scratchpad::{
-    LayeredRevertableTxState, PreExecWorkingSet, RevertableTxState, TxChangeSet, TxScratchpad,
-    WorkingSet,
+    GasPayerError, GasSnapshot, LayeredRevertableTxState, PreExecWorkingSet, RevertableTxState,
+    TxChangeSet, TxScratchpad, WorkingSet,
 };
 pub use temp_cache::BorshSerializedSize;
 

@@ -254,6 +254,7 @@ where
 
     metrics.timings.reserve_gas_timer.start();
     let gas_price = pre_exec_working_set.gas_price();
+    tracing::info!("=== GAS DEBUG: gas_price = {:?} ===", gas_price);
     if let Err(err) =
         runtime
             .gas_enforcer()
@@ -309,9 +310,14 @@ where
     let transaction_consumption = &apply_tx.transaction_consumption;
 
     metrics.timings.refund_remaining_gas_timer.start();
+    let remaining = transaction_consumption.remaining_funds();
+    let base_fee_val = transaction_consumption.base_fee_value();
+    tracing::info!("=== GAS DEBUG: remaining_funds (refund) = {:?} ===", remaining);
+    tracing::info!("=== GAS DEBUG: base_fee_value (charged) = {:?} ===", base_fee_val);
+    tracing::info!("=== GAS DEBUG: gas_refund_recipient = {:?} ===", ctx.gas_refund_recipient());
     runtime.gas_enforcer().refund_remaining_gas(
         ctx.gas_refund_recipient(),
-        &transaction_consumption.remaining_funds(),
+        &remaining,
         &mut scratchpad,
     );
     metrics.timings.refund_remaining_gas_timer.end();
@@ -319,7 +325,7 @@ where
 
     metrics.timings.reward_prover_timer.start();
     runtime.gas_enforcer().reward_prover(
-        &transaction_consumption.base_fee_value(),
+        &base_fee_val,
         operating_mode,
         &mut scratchpad,
     );

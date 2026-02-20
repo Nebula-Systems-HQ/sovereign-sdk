@@ -7,9 +7,10 @@ mod tests;
 #[cfg(any(feature = "test-utils", feature = "evm"))]
 pub use accessors::UnmeteredStateWrapper;
 pub use accessors::{
-    AccessoryDelta, BootstrapWorkingSet, BorshSerializedSize, ChangeSet, GenesisStateAccessor,
-    KernelStateAccessor, LayeredRevertableTxState, PreExecWorkingSet, RevertableTxState,
-    StateCheckpoint, StateMetricsProvider, StateProvider, TxChangeSet, TxScratchpad, WorkingSet,
+    AccessoryDelta, BootstrapWorkingSet, BorshSerializedSize, ChangeSet, GasPayerError,
+    GasSnapshot, GenesisStateAccessor, KernelStateAccessor, LayeredRevertableTxState,
+    PreExecWorkingSet, RevertableTxState, StateCheckpoint, StateMetricsProvider, StateProvider,
+    TxChangeSet, TxScratchpad, WorkingSet,
 };
 #[cfg(feature = "native")]
 pub use accessors::{
