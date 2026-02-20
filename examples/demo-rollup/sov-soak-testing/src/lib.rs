@@ -9,7 +9,7 @@ use sov_paymaster::{
     SafeVec,
 };
 use sov_rollup_interface::execution_mode::Native;
-use sov_sequencer::preferred::{PostgresConfig, PreferredSequencerConfig};
+use sov_sequencer::preferred::{ConfiguredNodeRole, PostgresConfig, PreferredSequencerConfig};
 use sov_sequencer::SequencerKindConfig;
 pub use sov_soak_testing_lib::*;
 use sov_synthetic_load::SyntheticLoad;
@@ -125,12 +125,14 @@ pub async fn setup_rollup(
     let postgres_config = db_connection_url.map(|url| PostgresConfig {
         postgres_connection_string: url,
         node_id: "Primary".to_string(),
+        node_role: ConfiguredNodeRole::Leader,
+        leader_election: Default::default(),
     });
 
     let rollup_builder = TestRollupBuilder::new_with_storage_path(
         GenesisSource::CustomParams(setup.genesis_config.clone().into_genesis_params()),
-        sov_soak_testing_lib::DEFAULT_BLOCK_PRODUCING_CONFIG,
-        sov_soak_testing_lib::DEFAULT_FINALIZATION_BLOCKS,
+        DEFAULT_BLOCK_PRODUCING_CONFIG,
+        DEFAULT_FINALIZATION_BLOCKS,
         StoragePath::Buf(storage_path),
         false,
     )

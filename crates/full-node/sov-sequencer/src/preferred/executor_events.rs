@@ -1,9 +1,12 @@
 use std::num::NonZero;
 use std::sync::Arc;
 
+use rockbound::cache::delta_reader::DeltaReader;
 use sov_blob_sender::BlobInternalId;
 use sov_blob_storage::SequenceNumber;
-use sov_modules_api::{Runtime, Spec, StateCheckpoint, TxChangeSet, VisibleSlotNumber};
+use sov_modules_api::{
+    Runtime, Spec, StateCheckpoint, StateUpdateInfo, TxChangeSet, VisibleSlotNumber,
+};
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, oneshot, watch};
 
@@ -13,6 +16,7 @@ use crate::preferred::db::{BlobsCache, ReadBatch};
 use crate::preferred::{
     exit_rollup, Confirmation, DbEvent, PreferredBatchToReplay, ReadBlob, RecoveryStrategy,
 };
+use crate::SlotNumber;
 
 const MAX_EXECUTOR_EVENT_QUEUE_DEPTH: usize = 1000;
 
@@ -161,10 +165,18 @@ impl<S: Spec, Rt: Runtime<S>> ExecutorEventsSender<S, Rt> {
         .await;
     }
 
-    pub(crate) async fn close_batch(&mut self, checkpoint: StateCheckpoint<S>) {
+    pub(crate) async fn close_batch(
+        &mut self,
+        checkpoint: StateCheckpoint<S>,
+        forced_txs: Vec<AcceptedTx<Confirmation<S, Rt>>>,
+    ) {
         let batch = self.cache.terminate_batch().await;
-        self.send(ExecutorEvent::CloseBatch(batch, checkpoint))
-            .await;
+        self.send(ExecutorEvent::CloseBatch {
+            batch,
+            checkpoint,
+            forced_txs,
+        })
+        .await;
     }
 
     pub(crate) async fn prune(&mut self, prune_up_to_including: SequenceNumber) {
@@ -177,6 +189,16 @@ impl<S: Spec, Rt: Runtime<S>> ExecutorEventsSender<S, Rt> {
         // No cache operation needed here - this is a side effect only.
         self.send(ExecutorEvent::ForceUpdateApiState(checkpoint))
             .await;
+    }
+
+    pub(crate) async fn update_api_ledger_from_info(&self, info: &StateUpdateInfo<S::Storage>) {
+        self.send(ExecutorEvent::UpdateApiLedger {
+            ledger_reader: info.ledger_reader.clone(),
+            slot_number: info.slot_number,
+            latest_finalized_slot_number: info.latest_finalized_slot_number,
+            next_tx_number: info.next_tx_number,
+        })
+        .await;
     }
 
     /// Fetch the in-progress batch from the database.
@@ -306,13 +328,24 @@ where
         blob_id: BlobInternalId,
     },
     /// Close the current batch.
-    CloseBatch(ReadBatch, StateCheckpoint<S>),
+    CloseBatch {
+        batch: ReadBatch,
+        checkpoint: StateCheckpoint<S>,
+        forced_txs: Vec<AcceptedTx<Confirmation<S, Rt>>>,
+    },
     /// Publish a proof blob.
     PublishProofBlob(BlobInternalId, Arc<[u8]>, SequenceNumber),
     /// Insert an accepted transaction into the database and send out the confirmation
     AcceptedTx(AcceptedTxEventContents<S, Rt>),
     /// Update the API state to the given checkpoint without closing the current batch etc. Used during recovery
     ForceUpdateApiState(StateCheckpoint<S>),
+    /// Update the ledger reader and send slot notifications for API/WebSocket consistency.
+    UpdateApiLedger {
+        ledger_reader: DeltaReader,
+        slot_number: SlotNumber,
+        latest_finalized_slot_number: SlotNumber,
+        next_tx_number: u64,
+    },
     /// Prune the database up to the given sequence number.
     PruneDb(SequenceNumber),
     /// Enter recovery mode.

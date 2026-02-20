@@ -9,6 +9,7 @@
 //! invariants and we'd rather have an application crash due to broken
 //! invariants than to have bugs that result in subtle state inconsistencies.
 
+pub mod heartbeat_task;
 pub mod postgres;
 pub mod rocksdb;
 use crate::preferred::PostgresBackend;
@@ -18,6 +19,7 @@ use axum::async_trait;
 use borsh::{BorshDeserialize, BorshSerialize};
 use sov_blob_sender::{new_blob_id, BlobInternalId};
 use sov_blob_storage::{PreferredBatchData, SequenceNumber};
+use sov_full_node_configs::sequencer::ConfiguredNodeRole;
 use sov_full_node_configs::sequencer::PostgresConfig;
 use sov_modules_api::capabilities::BlobSelector;
 use sov_modules_api::{
@@ -25,6 +27,7 @@ use sov_modules_api::{
     VisibleSlotNumber,
 };
 use std::collections::VecDeque;
+use std::net::SocketAddr;
 use std::num::NonZero;
 use std::path::Path;
 use std::sync::Arc;
@@ -416,10 +419,15 @@ impl From<BatchToStore> for StoredBlob {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub(crate) enum SequencerRole {
-    Replica,
-    Leader,
+/// The role of the sequencer in a distributed setup.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum SequencerRole {
+    /// Node that does not sync with the `BatchProducer` and relies on DA for updates.
+    DaOnlyReplica,
+    /// Node that syncs with the `BatchProducer` via PostgreSQL.
+    PgSyncReplica,
+    /// Node that accepts transactions and produces batches.
+    BatchProducer,
 }
 
 pub struct PreferredSequencerDb {
@@ -430,35 +438,61 @@ pub struct PreferredSequencerDb {
 impl PreferredSequencerDb {
     pub(crate) async fn new(
         shutdown_sender: watch::Sender<()>,
-        is_replica: Option<bool>,
         storage_path: &Path,
         postgres_config: &Option<PostgresConfig>,
+        bind_addr: SocketAddr,
     ) -> anyhow::Result<(Self, SequencerRole)> {
-        let is_replica = is_replica.unwrap_or(false);
-        if is_replica {
-            return Ok((
-                Self {
-                    backend: None,
-                    shutdown_sender: shutdown_sender.clone(),
-                },
-                SequencerRole::Replica,
-            ));
-        }
-
-        let backend: Option<Box<dyn DbBackend>> = {
+        let (backend, role): (Option<Box<dyn DbBackend>>, _) = {
             if let Some(postgres_config) = &postgres_config {
-                Some(Box::new(PostgresBackend::connect(postgres_config).await?))
+                match postgres_config.node_role {
+                    ConfiguredNodeRole::ReplicaNoLeaderSync => (None, SequencerRole::DaOnlyReplica),
+                    ConfiguredNodeRole::Replica => (None, SequencerRole::PgSyncReplica),
+                    ConfiguredNodeRole::Leader => {
+                        let backend = PostgresBackend::connect(postgres_config, bind_addr).await?;
+                        let _ = backend
+                            .heartbeat(Some(postgres_config.leader_election))
+                            .await?;
+
+                        (Some(Box::new(backend)), SequencerRole::BatchProducer)
+                    }
+                    ConfiguredNodeRole::DbElected => {
+                        let backend = PostgresBackend::connect(postgres_config, bind_addr).await?;
+                        let maybe_leader = backend
+                            .heartbeat(Some(postgres_config.leader_election))
+                            .await?;
+
+                        let is_leader = maybe_leader
+                            .map(|leader| leader.node_id == postgres_config.node_id)
+                            .unwrap_or(false);
+
+                        if is_leader {
+                            tracing::info!(
+                                node_id = %postgres_config.node_id,
+                                "DbElected node acquired leadership, running as BatchProducer"
+                            );
+                            (Some(Box::new(backend)), SequencerRole::BatchProducer)
+                        } else {
+                            tracing::info!(
+                                node_id = %postgres_config.node_id,
+                                "DbElected node did not acquire leadership, running as PgSyncReplica"
+                            );
+                            (None, SequencerRole::PgSyncReplica)
+                        }
+                    }
+                }
             } else {
-                Some(Box::new(RocksDbBackend::new(storage_path).await?))
+                (
+                    Some(Box::new(RocksDbBackend::new(storage_path).await?)),
+                    SequencerRole::BatchProducer,
+                )
             }
         };
-
         Ok((
             Self {
                 backend,
                 shutdown_sender: shutdown_sender.clone(),
             },
-            SequencerRole::Leader,
+            role,
         ))
     }
 

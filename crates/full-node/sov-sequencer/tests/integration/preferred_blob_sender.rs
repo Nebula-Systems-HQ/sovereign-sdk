@@ -13,7 +13,7 @@ use sov_rollup_interface::stf::BlobDiscardReason;
 use sov_test_utils::runtime::genesis::optimistic::HighLevelOptimisticGenesisConfig;
 use sov_test_utils::test_rollup::TestRollup;
 use sov_test_utils::{
-    default_test_signed_transaction, TestSpec, TestUser, TEST_BLOB_PROCESSING_TIMEOUT,
+    default_test_signed_transaction_with_nonce, TestSpec, TestUser, TEST_BLOB_PROCESSING_TIMEOUT,
     TEST_MAX_BATCH_SIZE,
 };
 use sov_value_setter::ValueSetterConfig;
@@ -39,6 +39,7 @@ async fn create_test_rollup() -> (TestRollup<TestBlueprint>, TestUser<TestSpec>)
             },
             (),
             PaymasterConfig::default(),
+            (),
             (),
         );
 
@@ -81,8 +82,8 @@ async fn test_discard_oversized_blobs() {
     );
     let (test_rollup, admin) = create_test_rollup().await;
 
-    test_rollup.da_service.produce_block_now().await.unwrap();
-    tokio::time::sleep(Duration::from_secs(1)).await;
+    test_rollup.produce_enough_finalized_slots().await;
+    test_rollup.wait_for_sequencer_ready().await.unwrap();
     let client = test_rollup.api_client().clone();
 
     // Blob with this transaction will be discarded becuse the blob is bigger than `MAX_ALLOWED_DATA_SIZE_RETURNED_BY_BLOB_STORAGE`
@@ -156,7 +157,7 @@ fn encode_call(
     nonce: u64,
     call_message: &<TestRuntime<TestSpec> as DispatchCall>::Decodable,
 ) -> RawTx {
-    let tx = default_test_signed_transaction::<TestRuntime<TestSpec>, TestSpec>(
+    let tx = default_test_signed_transaction_with_nonce::<TestRuntime<TestSpec>, TestSpec>(
         key,
         call_message,
         nonce,

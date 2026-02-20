@@ -36,11 +36,11 @@ use sov_rollup_interface::stf::{EventKey, StoredEvent};
 use sov_rollup_interface::zk::aggregated_proof::SerializedAggregatedProof;
 
 use super::types::{
-    AccessoryKey, AccessoryStateValue, BatchNumber, DbHash, EventNumber,
+    AccessoryKey, AccessoryStateValue, BatchNumber, DbHash, EventKeyNumber, EventNumber,
     LatestFinalizedSlotSingleton, ProofUniqueId, StateRootHashId, StfInfoUniqueId, StoredBatch,
     StoredSlot, StoredStfInfo, StoredTransaction, TxNumber,
 };
-use crate::schema::types::StoredDiscardedBlob;
+use crate::schema::types::{DiscardedBlobNumber, StoredDiscardedBlob};
 
 /* Other tables used by the Rollup */
 
@@ -50,8 +50,9 @@ pub const LEDGER_TABLES: &[ColumnFamilyName] = &[
     SlotByNumber::table_name(),
     SlotByHash::table_name(),
     BatchByHash::table_name(),
-    DiscardedBlobByHash::table_name(),
     BatchByNumber::table_name(),
+    DiscardedBlobByHash::table_name(),
+    DiscardedBlobHahsByNumber::table_name(),
     TxByHash::table_name(),
     TxByNumber::table_name(),
     EventByKey::table_name(),
@@ -60,12 +61,17 @@ pub const LEDGER_TABLES: &[ColumnFamilyName] = &[
     FinalizedSlots::table_name(),
     StfInfoByNumber::table_name(),
     StfInfoMetadata::table_name(),
+    EventCountByKey::table_name(),
 ];
 
 /// A list of all tables used by the AccessoryDB. These tables store
 /// "accessory" state only accessible from a native execution context, to be
 /// used for JSON-RPC and other tooling.
-pub const ACCESSORY_TABLES: &[ColumnFamilyName] = &[ModuleAccessoryState::table_name()];
+pub const ACCESSORY_TABLES: &[ColumnFamilyName] = &[
+    ModuleAccessoryState::table_name(),
+    AccessoryKeysByVersion::table_name(),
+    StateRootHashes::table_name(),
+];
 
 /// Macro to define a table that implements [`rockbound::Schema`].
 /// `KeyCodec<Schema>` and `ValueCodec<Schema>` must be implemented separately.
@@ -236,14 +242,19 @@ define_table_with_seek_key_codec!(
     (BatchByNumber) BatchNumber => StoredBatch
 );
 
-define_table_with_seek_key_codec!(
-    /// The primary source for discarded blobs
-    (DiscardedBlobByHash) DbHash => StoredDiscardedBlob
-);
-
 define_table_with_default_codec!(
     /// A "secondary index" for batch data by hash
     (BatchByHash) DbHash => BatchNumber
+);
+
+define_table_with_seek_key_codec!(
+     /// A "secondary index" for discarded blobs.
+    (DiscardedBlobHahsByNumber) DiscardedBlobNumber => DbHash
+);
+
+define_table_with_seek_key_codec!(
+    /// The primary source for discarded blobs
+    (DiscardedBlobByHash) DbHash => StoredDiscardedBlob
 );
 
 define_table_with_seek_key_codec!(
@@ -269,6 +280,11 @@ define_table_with_seek_key_codec!(
 );
 
 define_table_with_seek_key_codec!(
+    /// Tracks the total count of events per event key
+    (EventCountByKey) EventKey => EventKeyNumber
+);
+
+define_table_with_seek_key_codec!(
     /// The primary source for proof data
     (ProofByUniqueId) ProofUniqueId => SerializedAggregatedProof
 );
@@ -285,6 +301,12 @@ define_table_with_seek_key_codec!(
 define_table_without_codec!(
     /// Non-JMT state stored by a module for JSON-RPC use.
     (ModuleAccessoryState) (AccessoryKey, SlotNumber) => AccessoryStateValue
+);
+
+define_table_without_codec!(
+    /// Secondary index for efficient rollback.
+    /// This allows fast lookup of all keys written at a specific version.
+    (AccessoryKeysByVersion) (SlotNumber, AccessoryKey) => ()
 );
 
 impl KeyEncoder<ModuleAccessoryState> for (AccessoryKey, SlotNumber) {
@@ -323,5 +345,44 @@ impl ValueCodec<ModuleAccessoryState> for AccessoryStateValue {
 
     fn decode_value(data: &[u8]) -> rockbound::schema::Result<Self> {
         Ok(Self::deserialize_reader(&mut &data[..])?)
+    }
+}
+
+impl KeyEncoder<AccessoryKeysByVersion> for (SlotNumber, AccessoryKey) {
+    fn encode_key(&self) -> rockbound::schema::Result<Vec<u8>> {
+        let mut out = Vec::with_capacity(std::mem::size_of::<Version>() + self.1.len() + 8);
+
+        out.write_u64::<BigEndian>(self.0.get())
+            .expect("serialization to vec is infallible");
+        self.1
+            .as_slice()
+            .serialize(&mut out)
+            .map_err(CodecError::from)?;
+        Ok(out)
+    }
+}
+
+impl SeekKeyEncoder<AccessoryKeysByVersion> for (SlotNumber, AccessoryKey) {
+    fn encode_seek_key(&self) -> rockbound::schema::Result<Vec<u8>> {
+        <(SlotNumber, AccessoryKey) as KeyEncoder<AccessoryKeysByVersion>>::encode_key(self)
+    }
+}
+
+impl KeyDecoder<AccessoryKeysByVersion> for (SlotNumber, AccessoryKey) {
+    fn decode_key(data: &[u8]) -> rockbound::schema::Result<Self> {
+        let mut cursor = std::io::Cursor::new(data);
+        let version = cursor.read_u64::<BigEndian>()?;
+        let key = Vec::<u8>::deserialize_reader(&mut cursor)?;
+        Ok((SlotNumber::new_dangerous(version), key))
+    }
+}
+
+impl ValueCodec<AccessoryKeysByVersion> for () {
+    fn encode_value(&self) -> rockbound::schema::Result<Vec<u8>> {
+        Ok(Vec::new())
+    }
+
+    fn decode_value(_data: &[u8]) -> rockbound::schema::Result<Self> {
+        Ok(())
     }
 }

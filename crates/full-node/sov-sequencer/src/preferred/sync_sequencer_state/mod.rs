@@ -9,6 +9,7 @@ use crate::preferred::rate_limiter::ResourceLimitExceededError;
 use crate::preferred::rate_limiter::SovRateLimiter;
 use crate::preferred::replica::event_handler::ReplicaError;
 use crate::preferred::replica::event_receiver::EventReceiverStartNotifier;
+use crate::preferred::update_state::SequenceNumberMismatchError;
 use crate::preferred::AcceptedTx;
 use crate::preferred::BatchCreationError;
 use crate::preferred::Confirmation;
@@ -20,7 +21,6 @@ use crate::{SequencerNotReadyDetails, TxHash};
 pub(crate) use inner::*;
 use sov_blob_sender::BlobInternalId;
 use sov_blob_storage::SequenceNumber;
-use sov_db::ledger_db::LedgerDb;
 use sov_full_node_configs::sequencer::{PreferredSequencerConfig, SequencerConfig};
 use sov_modules_api::capabilities::RollupHeight;
 use sov_modules_api::GasArray;
@@ -75,7 +75,7 @@ pub(super) enum Message<S: Spec, Rt: Runtime<S>> {
     },
 
     FinalCatchup {
-        resp: oneshot::Sender<anyhow::Result<ProcessFinalCatchupData>>,
+        resp: oneshot::Sender<Result<ProcessFinalCatchupData, SequenceNumberMismatchError>>,
         info: StateUpdateInfo<S::Storage>,
         db_event_subscription: mpsc::Receiver<DbEvent>,
         executor: Box<RollupBlockExecutor<S, Rt>>,
@@ -127,6 +127,10 @@ pub(super) enum Message<S: Spec, Rt: Runtime<S>> {
         batch_from_master: BatchToStore,
         reason: &'static str,
     },
+    GetSequencerRole {
+        resp: oneshot::Sender<SequencerRole>,
+        reason: &'static str,
+    },
 }
 
 impl<S: Spec, Rt: Runtime<S>> Message<S, Rt> {
@@ -145,7 +149,6 @@ impl<S: Spec, Rt: Runtime<S>> Message<S, Rt> {
 
 pub(crate) fn create<S, Rt>(
     seq_role: SequencerRole,
-    api_ledger_db: LedgerDb,
     latest_info: StateUpdateInfo<S::Storage>,
     tx_queue_id: Arc<AtomicU64>,
     batch_execution_time_limit_micros: u64,
@@ -181,7 +184,6 @@ where
 
     let inner = Inner {
         seq_role,
-        api_ledger_db,
         executor: RollupBlockExecutor::new(
             &latest_info,
             rollup_exec_config.clone(),

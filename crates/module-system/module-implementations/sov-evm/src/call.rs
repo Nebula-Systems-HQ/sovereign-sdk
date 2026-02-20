@@ -1,5 +1,6 @@
 use alloy_consensus::constants::KECCAK_EMPTY;
 use alloy_primitives::{Address, B256};
+use anyhow::ensure;
 use reth_primitives::TransactionSigned;
 use revm::context::result::{EVMError, ExecResultAndState, ExecutionResult};
 use revm::context::{BlockEnv, CfgEnv, TxEnv};
@@ -21,21 +22,37 @@ use std::convert::Infallible;
 use crate::conversions::{convert_to_tx_signed, create_tx_env};
 use crate::db::{self, metrics::MetricsDb};
 use crate::evm::primitive_types::{Receipt, TxSignedAndRecovered};
-use crate::evm::RlpEvmTransaction;
 #[cfg(feature = "native")]
 use crate::execution_config::EVM_EXECUTION_CONFIG;
 use crate::executor::{get_cfg_env, transact};
 #[cfg(feature = "native")]
 use crate::metrics::EvmTxMetrics;
-use crate::{gas_metering_mode, Evm, EvmRuntimeConfig, GasMeteringMode, PendingTransaction};
+use crate::{
+    gas_metering_mode, BorshSpecId, ChainSpecUpdate, ContractCreationPolicy,
+    ContractCreationPolicyUpdate, Evm, EvmChainSpec, EvmRuntimeConfig, EvmRuntimeConfigUpdate,
+    GasMeteringMode, PendingTransaction, RlpEvmTransaction,
+};
 use anyhow::{bail, Context as _};
+
+/// The maximum contract code size is 2MB
+const MAX_CONTRACT_CODE_SIZE: usize = 2 * 1024 * 1024;
+/// Don't let the admin lower the gas limit below 5M to avoid censorship. Setting the gas limit to 0 is censorship.
+const MIN_BLOCK_GAS_LIMIT: u64 = 5_000_000;
+/// The largest value that the admin can set for the tx gas limit.
+/// Setting an infinitely high gas limit would allow DOS by the sequencer/operator.
+const MAX_TX_GAS_LIMIT: u64 = 10_000_000_000;
 
 /// EVM call message.
 #[derive(Debug, PartialEq, Eq, Clone, schemars::JsonSchema, UniversalWallet)]
 #[serialize(Borsh, Serde)]
-pub struct CallMessage {
+#[serde(rename_all = "snake_case")]
+#[serde(bound = "S: Spec")]
+#[schemars(bound = "S: Spec", rename = "call_message")]
+pub enum CallMessage<S: Spec> {
     /// RLP encoded transaction.
-    pub rlp: RlpEvmTransaction,
+    Call(RlpEvmTransaction),
+    /// Update the runtime configuration
+    UpdateRuntimeConfig(EvmRuntimeConfigUpdate<S>),
 }
 
 impl<S: Spec> Evm<S>
@@ -70,23 +87,158 @@ where
         // Inside the EVM, we use nonces only for the CREATE operation.
         // The uniqueness check was performed before the call was dispatched.
         let account_nonce = self.get_account_nonce(signer, state)?;
-        let gas_limit = self.gas_limit(state);
-        let tx_env = create_tx_env(&tx, signer, account_nonce, gas_limit);
-        let tx = TxSignedAndRecovered::new(signer, tx, block_env.number.to::<u64>());
         let cfg = self.cfg(state)?;
         let cfg_env = get_cfg_env(&block_env, &cfg, None);
+        let gas_limit = self.gas_limit(state, &cfg.chain_spec);
+        let tx_env = create_tx_env(&tx, signer, account_nonce, gas_limit);
+        let tx = TxSignedAndRecovered::new(signer, tx, block_env.number.to::<u64>());
 
         Ok((cfg, cfg_env, block_env, tx_env, tx, pending_len))
     }
 
+    pub(crate) fn update_runtime_config(
+        &mut self,
+        update: EvmRuntimeConfigUpdate<S>,
+        context: &Context<S>,
+        state: &mut impl TxState<S>,
+    ) -> anyhow::Result<()> {
+        let Some(admin) = self.admin.get(state)? else {
+            bail!("No EVM admin is configured. The config cannot be updated without an admin.");
+        };
+        ensure!(
+            context.sender() == &admin,
+            "Only the admin can update the runtime configuration. Got {} but expected {admin}",
+            context.sender()
+        );
+        // Check if all fields are None - this is the signal to disable max fee check
+        if update.is_empty() {
+            self.disable_max_fee_check.set(&true, state)?;
+            return Ok(());
+        }
+
+        let mut cfg = self.cfg(state)?;
+
+        let EvmRuntimeConfigUpdate {
+            new_hardfork,
+            new_contract_creation_policy,
+            chain_spec_update,
+            new_admin,
+        } = update;
+
+        // Update admin (no validation required)
+        if let Some(new_admin) = new_admin {
+            self.admin.set(&new_admin, state)?;
+        }
+
+        // Add hardfork activation, validating that it has a future height and is greater than the current spec id
+        if let Some((activation_block_number, BorshSpecId(spec_id))) = new_hardfork {
+            self.validate_new_hardfork(activation_block_number, spec_id, &cfg, state)?;
+            cfg.hardforks.push((activation_block_number, spec_id));
+            cfg.chain_spec
+                .hardforks
+                .push((activation_block_number, spec_id));
+        }
+
+        // Update contract creation policy
+        if let Some(new_contract_creation_policy) = new_contract_creation_policy {
+            match new_contract_creation_policy {
+                ContractCreationPolicyUpdate::Everyone => {
+                    cfg.contract_creation_policy = ContractCreationPolicy::Everyone;
+                }
+                ContractCreationPolicyUpdate::Allowlist { add, remove } => {
+                    let mut allowlist = cfg.contract_creation_policy.take_allowlist();
+                    for address in add {
+                        allowlist.insert(address.0.into());
+                    }
+                    for address in remove {
+                        let address: Address = address.0.into();
+                        allowlist.remove(&address);
+                    }
+                    cfg.contract_creation_policy = ContractCreationPolicy::Allowlist(allowlist);
+                }
+            }
+        }
+
+        // Update the chain spec
+        if let Some(chain_spec_update) = chain_spec_update {
+            self.apply_chain_spec_update(chain_spec_update, &mut cfg)?;
+        }
+
+        self.cfg.set(&cfg, state)?;
+        Ok(())
+    }
+
+    fn apply_chain_spec_update(
+        &mut self,
+        chain_spec_update: ChainSpecUpdate,
+        cfg: &mut EvmRuntimeConfig,
+    ) -> anyhow::Result<()> {
+        // Update the contract size limit
+        if let Some(new_limit) = chain_spec_update.new_limit_contract_code_size {
+            ensure!(
+                new_limit < MAX_CONTRACT_CODE_SIZE,
+                "Contract code size limit must be less than {MAX_CONTRACT_CODE_SIZE}"
+            );
+            cfg.chain_spec.limit_contract_code_size = Some(new_limit);
+        }
+
+        // Update the block gas limit
+        if let Some(new_block_gas_limit) = chain_spec_update.new_block_gas_limit {
+            ensure!(
+                new_block_gas_limit > MIN_BLOCK_GAS_LIMIT,
+                "Block gas limit must be greater than {MIN_BLOCK_GAS_LIMIT} to avoid censorship"
+            );
+            cfg.chain_spec.block_gas_limit = new_block_gas_limit;
+        }
+
+        // Update the tx gas limit
+        if let Some(new_tx_gas_limit) = chain_spec_update.new_tx_gas_limit {
+            ensure!(new_tx_gas_limit <= cfg.chain_spec.block_gas_limit, "Tx gas limit must be less than or equal to the effective block gas limit after applying the update");
+            ensure!(new_tx_gas_limit <= MAX_TX_GAS_LIMIT, "Tx gas limit must be less than or equal to {MAX_TX_GAS_LIMIT} to avoid DOS by the sequencer/operator");
+            cfg.chain_spec.tx_gas_limit = Some(new_tx_gas_limit);
+        }
+
+        Ok(())
+    }
+
+    fn validate_new_hardfork(
+        &self,
+        activation_block_number: u64,
+        spec_id: SpecId,
+        cfg: &EvmRuntimeConfig,
+        state: &mut impl TxState<S>,
+    ) -> anyhow::Result<()> {
+        let current_rollup_block = state.rollup_height_to_access().get();
+        if current_rollup_block >= activation_block_number {
+            bail!("Hardfork activation block number must be greater than the current rollup block. Got {activation_block_number} but expected greater than {current_rollup_block}");
+        }
+
+        let (last_hardfork_activation_block, current_spec_id) = cfg
+            .hardforks
+            .last()
+            .cloned()
+            .unwrap_or((current_rollup_block, SpecId::CANCUN));
+
+        if spec_id <= current_spec_id {
+            bail!("Hardfork spec ID must be greater than the current spec ID. Got {spec_id} but expected greater than {current_spec_id}");
+        }
+
+        if activation_block_number <= last_hardfork_activation_block {
+            bail!("Hardfork activation block number must be greater than the activation block of the newest hardfork. Got {activation_block_number} but expected greater than {last_hardfork_activation_block}");
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn execute_call(
         &mut self,
-        message: CallMessage,
+        message: RlpEvmTransaction,
         context: &Context<S>,
         state: &mut impl TxState<S>,
     ) -> anyhow::Result<()> {
         start_timer!(total);
-        let tx = convert_to_tx_signed(message.rlp)?;
+        // Note: This does *not* verify the signature
+        let tx = convert_to_tx_signed(message)?;
 
         if matches!(tx, alloy_consensus::EthereumTxEnvelope::Eip4844(_)) {
             anyhow::bail!("Eip4844 not supported");
@@ -95,6 +247,7 @@ where
         start_timer!(fetch_state);
         let (cfg, cfg_env, block, tx_env, tx, pending_len) =
             self.fetch_state(context, state, tx)?;
+
         save_elapsed!(fetch_state_time SINCE fetch_state);
         let db = self.db(state);
         let mut db = MetricsDb::new(db);
@@ -108,6 +261,7 @@ where
             Err(err) => return on_error(*tx.signed_transaction.hash(), err),
         };
 
+        // Subtract the gas balance from the caller's account here. If balance is subzero, revert the SDK transaction
         save_elapsed!(execution_time SINCE execution);
         verify_contract_creation_allowlist(&state_changes, &tx.signer, &cfg, &mut db)?;
         #[cfg(feature = "native")]
@@ -140,9 +294,7 @@ where
         start_timer!(set_state);
 
         // Note that we get the time unconditionally here, as we want to store the time in the pending transaction and have consistent gas metering across zk/native
-        let time = self
-            .chain_state_module
-            .get_oracle_time_with_fallback(state)?;
+        let time = self.chain_state_module.get_oracle_time(state)?;
 
         let pending_tx = PendingTransaction::new(tx, receipt, time);
         self.pending_transactions.push(&pending_tx, state)?;
@@ -161,8 +313,14 @@ where
         #[cfg(feature = "native")]
         let set_accessory_state_time = {
             start_timer!(set_accessory_state);
+            // Places this after timer, so we don't have unmetered parts
+            let tx_fee_paid = state
+                .try_as_basic_gas_meter()
+                .expect("TxState should have BasicGasMeter")
+                .gas_info()
+                .gas_value;
             // Since we just inserted tx above, we need to increment `pending_len`` by 1.
-            self.set_accessory_state(head, &pending_tx, pending_len + 1, state)
+            self.set_accessory_state(head, &pending_tx, pending_len + 1, tx_fee_paid, state)
                 .unwrap_infallible();
             set_accessory_state.elapsed()
         };
@@ -198,24 +356,23 @@ where
         Ok(())
     }
 
-    fn gas_limit(&self, state: &mut impl TxState<S>) -> u64 {
+    fn gas_limit(&self, state: &mut impl TxState<S>, spec: &EvmChainSpec) -> u64 {
         let gas_meter = state
             .try_as_basic_gas_meter()
             .expect("TxState should have BasicGasMeter");
-        let funds = gas_meter
-            .remaining_funds
-            .expect("TxState gas meter has funds set")
-            .0;
+        let funds = gas_meter.remaining_funds.map(|funds| funds.0).unwrap_or(0);
         let gas = gas_meter.remaining_gas.as_ref()[0];
         let price = gas_meter.gas_price.as_ref()[0].0;
-        match (funds, gas) {
+        let gas_limit = match (funds, gas) {
             (0, 0) => 0,
             (_, 0) => u64::MAX,
             (funds, gas) => {
-                let gas_from_funds = (funds / price).min(u64::MAX as u128) as u64;
+                let gas_from_funds = (funds.checked_div(price).unwrap_or(u64::MAX as u128))
+                    .min(u64::MAX as u128) as u64;
                 gas.min(gas_from_funds)
             }
-        }
+        };
+        gas_limit.min(spec.tx_gas_limit.unwrap_or(u64::MAX))
     }
 
     fn sequencer_gas_used(&self, state: &mut impl TxState<S>) -> u64 {
@@ -309,6 +466,7 @@ where
         head: crate::Block,
         pending_transaction: &PendingTransaction,
         pending_tx_len: u64,
+        tx_fee_paid: sov_bank::Amount,
         state: &mut impl TxState<S>,
     ) -> Result<(), Infallible> {
         assert!(pending_tx_len > 0);
@@ -329,6 +487,7 @@ where
             ),
             state,
         )?;
+        self.receipt_fees.set(&tx_index, &tx_fee_paid, state)?;
 
         let hash = pending_transaction.transaction.signed_transaction.hash();
         self.transaction_hashes.set(hash, &tx_index, state)?;

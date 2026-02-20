@@ -10,6 +10,7 @@ use alloy::transports::RpcError;
 use alloy::transports::TransportErrorKind;
 use alloy_primitives::Address;
 use alloy_provider::DynProvider;
+use alloy_rpc_types_eth::TransactionInput;
 use core::net::SocketAddr;
 use reqwest::header::HeaderMap;
 use reqwest::header::HeaderValue;
@@ -38,18 +39,18 @@ async fn setup_test_rollup(
 ) -> TestRollup<MockDemoRollup<Native>> {
     let host_args = mock_da_risc0_host_args();
     let config = get_appropriate_rollup_prover_config::<MockRollupSpec<Native>>(host_args);
-    start_node(config, 0, Some(EVM_EXTENSION), None, Some(rate_limiter)).await
+    start_node(config, 0, Some(EVM_EXTENSION), Some(rate_limiter)).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn evm_test_rate_limit() -> anyhow::Result<()> {
     let rate_limiter = SovRateLimiterConfig {
         default_limits: Limits {
-            resources_per_bucket: 5,
+            resources_per_bucket: 1,
             refill_rate: 0,
         },
         max_nb_of_concurrent_users_in_rate_limiter: 1000,
-        max_requests_per_second: 0,
+        max_requests_per_second: 1,
         address_custom_limits: Vec::default(),
         ip_custom_limits: Vec::default(),
     };
@@ -60,7 +61,12 @@ async fn evm_test_rate_limit() -> anyhow::Result<()> {
     // Make first request.
     {
         let client = make_client_with_x_forwarded_for_header(rollup.http_addr, SENDER_PRIV_KEY);
-        let tx = TransactionRequest::default().with_to(Address::ZERO);
+        let mut tx = TransactionRequest::default().with_to(Address::ZERO);
+        // Set some input to cross the allowed space limit.
+        tx.input = TransactionInput {
+            input: Some(vec![1; 10000].into()),
+            data: None,
+        };
         let pending = client.send_transaction(tx).await?;
         _ = pending.watch().await?;
     }
@@ -77,13 +83,10 @@ async fn evm_test_rate_limit() -> anyhow::Result<()> {
 }
 
 fn assert_err(err: RpcError<TransportErrorKind>) {
-    let err_str = err
-        .as_error_resp()
-        .unwrap()
-        .data
-        .as_ref()
-        .unwrap()
-        .to_string();
-
-    err_str.contains("X_FORWARDED_FOR");
+    let payload = err.as_error_resp().unwrap();
+    assert!(
+        payload.message.as_ref().contains(X_FORWARDED_FOR),
+        "expected error message to include IP: {X_FORWARDED_FOR}, but it was: {}",
+        payload.message,
+    );
 }
