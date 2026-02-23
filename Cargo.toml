@@ -33,6 +33,7 @@ members = [
     "crates/utils/sov-encryption",
     "crates/utils/sov-test-utils",
     "crates/utils/sov-evm-test-utils",
+    "crates/utils/sov-proxy-utils",
     # Module System
     "crates/module-system/sov-cli",
     "crates/module-system/sov-modules-stf-blueprint",
@@ -53,6 +54,8 @@ members = [
     "crates/module-system/module-implementations/sov-prover-incentives",
     "crates/module-system/module-implementations/sov-attester-incentives",
     "crates/module-system/module-implementations/sov-sequencer-registry",
+    "crates/module-system/module-implementations/sb-session-registry",
+    "crates/module-system/module-implementations/sb-blacklist",
     "crates/module-system/sov-solana-offchain-auth",
     "crates/module-system/sov-eip712-auth",
     "crates/module-system/module-implementations/sov-value-setter",
@@ -191,10 +194,11 @@ sov-build = { path = "crates/utils/sov-build" }
 sovereign-web3 = { path = "crates/web3" }
 workspace-hack = { path = "crates/utils/workspace-hack" }
 nearly-linear = { path = "crates/utils/nearly-linear", version = "0.3" }
+sov-proxy-utils = { path = "crates/utils/sov-proxy-utils", version = "0.3" }
 # Dependencies maintained by Sovereign
 jmt = { version = "0.12.0", default-features = false }
 reltester = { git = "https://github.com/sovereign-labs/reltester.git", rev = "d6209abff72929f5ba41614f5cea3e4a748428c3" }
-rockbound = { git = "https://github.com/sovereign-labs/rockbound", rev = "e8d1cfa7402a3ab90369d664bd88a52394cd40e6" }
+rockbound = { git = "https://github.com/sovereign-labs/rockbound", rev = "c0495b56687075e5d237a248679a69ad6f1d04b7" }
 nmt-rs = { version = "0.2.5", features = ["serde", "borsh"] }
 # External dependencies
 nomt-core = { version = "1.0.3", default-features = false, features = ["borsh", "serde"] }
@@ -204,7 +208,7 @@ concread = { version = "0.5.7" }
 anyhow = { version = "1.0.95" }
 async-trait = "0.1.81"
 arrayvec = { version = "0.7.6", features = ["serde", "borsh"] }
-console-subscriber = "0.4"
+console-subscriber = "0.5"
 
 axum = { version = "0.7.9", default-features = false }
 axum-server = { version = "0.7", features = ["tls-rustls"] }

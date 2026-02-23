@@ -1,9 +1,12 @@
 ---
 source: crates/full-node/full-node-configs/src/runner.rs
+<<<<<<< HEAD
 <<<<<<< HEAD:crates/full-node/full-node-configs/src/snapshots/full_node_configs__runner__tests__correct_config.snap
 =======
 assertion_line: 226
 >>>>>>> origin/feat/lrtsv2-dec31:crates/full-node/full-node-configs/src/snapshots/sov_full_node_configs__runner__tests__correct_config.snap
+=======
+>>>>>>> da376562d0037cb3707f17ed696b3c963b4626bd
 expression: config
 ---
 {
@@ -15,19 +18,19 @@ expression: config
     "user_preallocate_ht": null,
     "user_page_cache_size": null,
     "user_leaf_cache_size": null,
+    "user_page_cache_upper_levels": null,
     "kernel_commit_concurrency": null,
     "kernel_hashtable_buckets": null,
     "kernel_preallocate_ht": null,
     "kernel_page_cache_size": null,
     "kernel_leaf_cache_size": null,
+    "kernel_page_cache_upper_levels": null,
     "pruner_block_interval": null,
     "pruner_versions_to_keep": null,
-    "pruner_max_batch_size": null,
-    "separate_archival_state": false
+    "pruner_max_batch_size": null
   },
   "runner": {
     "da_polling_interval_ms": 10000,
-    "da_total_timeout_secs": 600,
     "http_config": {
       "bind_host": "127.0.0.1",
       "bind_port": 12346,
@@ -47,7 +50,8 @@ expression: config
         "block_time_ms": 1000
       }
     },
-    "randomization": null
+    "randomization": null,
+    "failure_behavior": "none"
   },
   "proof_manager": {
     "aggregated_proof_block_jump": 22,

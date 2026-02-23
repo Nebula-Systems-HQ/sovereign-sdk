@@ -41,7 +41,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
     ) -> anyhow::Result<(Self, Option<JoinHandle<()>>)> {
         let nb_of_concurrent_blob_submissions = Arc::new(AtomicUsize::new(0));
         match seq_role {
-            SequencerRole::Replica => Ok((
+            SequencerRole::PgSyncReplica | SequencerRole::DaOnlyReplica => Ok((
                 Self {
                     inner: None,
                     nb_of_concurrent_blob_submissions,
@@ -49,7 +49,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
                 },
                 None,
             )),
-            SequencerRole::Leader => {
+            SequencerRole::BatchProducer => {
                 // It's possible that sov-blob-sender's DB might miss some blob data at
                 // node startup due to:
                 //  1. Disk failure (the sequencer can use Postgres so it's durable).

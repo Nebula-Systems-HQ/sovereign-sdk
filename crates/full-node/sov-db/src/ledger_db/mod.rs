@@ -10,15 +10,16 @@ use sov_rollup_interface::node::ledger_api::AggregatedProofResponse;
 use sov_rollup_interface::stf::{BatchReceipt, DiscardedBlob, StoredEvent, TxReceiptContents};
 use sov_rollup_interface::zk::aggregated_proof::SerializedAggregatedProof;
 
+use crate::schema::tables::DiscardedBlobHahsByNumber;
 use crate::schema::tables::{
     BatchByHash, BatchByNumber, DiscardedBlobByHash, EventByKey, EventByNumber, FinalizedSlots,
     ProofByUniqueId, SlotByHash, SlotByNumber, StfInfoByNumber, StfInfoMetadata, TxByHash,
     TxByNumber, LEDGER_TABLES,
 };
 use crate::schema::types::{
-    split_tx_for_storage, BatchNumber, EventNumber, LatestFinalizedSlotSingleton, ProofUniqueId,
-    StfInfoUniqueId, StoredBatch, StoredDiscardedBlob, StoredSlot, StoredStfInfo,
-    StoredTransaction, TxNumber,
+    split_tx_for_storage, BatchNumber, DiscardedBlobNumber, EventNumber,
+    LatestFinalizedSlotSingleton, ProofUniqueId, StfInfoUniqueId, StoredBatch, StoredDiscardedBlob,
+    StoredSlot, StoredStfInfo, StoredTransaction, TxNumber,
 };
 use crate::DbOptions;
 
@@ -38,6 +39,8 @@ pub struct ItemNumbers {
     pub slot_number: SlotNumber,
     /// The batch number
     pub batch_number: u64,
+    /// The discarded batch number
+    pub discarded_batch_number: u64,
     /// The transaction number
     pub tx_number: u64,
     /// The event number
@@ -327,6 +330,9 @@ impl LedgerDb {
             batch_number: Self::last_version_written(&db, BatchByNumber)?
                 .map(|x| x.0 + 1)
                 .unwrap_or_default(),
+            discarded_batch_number: Self::last_version_written(&db, DiscardedBlobHahsByNumber)?
+                .map(|x| x.0 + 1)
+                .unwrap_or_default(),
             tx_number: Self::last_version_written(&db, TxByNumber)?
                 .map(|x| x.0 + 1)
                 .unwrap_or_default(),
@@ -359,8 +365,13 @@ impl LedgerDb {
     fn put_discarded_blob(
         &self,
         blob: StoredDiscardedBlob,
+        discarded_batch_number: DiscardedBlobNumber,
         schema_batch: &mut SchemaBatch,
     ) -> anyhow::Result<()> {
+        schema_batch.put::<DiscardedBlobHahsByNumber>(
+            &discarded_batch_number,
+            &blob.discarded_blob.hash.0,
+        )?;
         schema_batch.put::<DiscardedBlobByHash>(&blob.discarded_blob.hash.0, &blob)
     }
 
@@ -440,12 +451,21 @@ impl LedgerDb {
             current_item_numbers.batch_number += 1;
         }
 
-        for discarded_blob in data_to_commit.discarded_blobs.into_iter() {
+        let first_discarded_blob_number = current_item_numbers.discarded_batch_number;
+
+        let last_discarded_blob_number =
+            first_discarded_blob_number + data_to_commit.discarded_blobs.len() as u64;
+
+        for (discarded_blob_index, discarded_blob) in
+            data_to_commit.discarded_blobs.into_iter().enumerate()
+        {
+            let discarded_blob_index = discarded_blob_index as u64;
             self.put_discarded_blob(
                 StoredDiscardedBlob {
                     discarded_blob,
                     slot_number,
                 },
+                DiscardedBlobNumber(first_discarded_blob_number + discarded_blob_index),
                 &mut schema_batch,
             )?;
         }
@@ -457,6 +477,8 @@ impl LedgerDb {
             // TODO: Add a method to the slot data trait allowing additional data to be stored
             extra_data: vec![].into(),
             batches: BatchNumber(first_batch_number)..BatchNumber(last_batch_number),
+            discarded_blobs: DiscardedBlobNumber(first_discarded_blob_number)
+                ..DiscardedBlobNumber(last_discarded_blob_number),
             timestamp: data_to_commit.slot_data.timestamp(),
         };
         self.put_slot(&slot_to_store, &slot_number, &mut schema_batch)?;
@@ -514,6 +536,13 @@ impl LedgerDb {
             .expect(DB_LOCK_POISONED)
             .clone()
             .get_largest::<SlotByNumber>()
+    }
+
+    /// Get the state root from the most recent committed slot, if any.
+    pub fn get_head_state_root(&self) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(self
+            .get_head_slot()?
+            .map(|(_, slot)| slot.state_root.as_ref().to_vec()))
     }
 
     /// Materializes aggregated zk proof
@@ -617,5 +646,258 @@ impl LedgerDb {
     ) -> anyhow::Result<Option<StoredDiscardedBlob>> {
         let db = self.db.read().expect(DB_LOCK_POISONED).clone();
         db.get_async::<DiscardedBlobByHash>(&blob_hash.0).await
+    }
+
+    /// Get the head state root hash.
+    pub fn get_head_root_hash(db: Arc<rockbound::DB>) -> anyhow::Result<Option<[u8; 64]>> {
+        let db = DeltaReader::new(db, Vec::new());
+        let state_root = db
+            .get_largest::<SlotByNumber>()?
+            .map(|(_, stored_slot)| {
+                let root = stored_slot.state_root.as_ref();
+                root.try_into()
+            })
+            .transpose()?;
+
+        Ok(state_root)
+    }
+
+    /// Rolls back the last committed slot from the ledger database.
+    /// If there are no slots in the database, this method returns `Ok(())` without doing anything.
+    pub fn rollback_head_slot(ledger_db: Arc<rockbound::DB>) -> anyhow::Result<()> {
+        let schema_batch = Self::create_schema_batch_for_rollback(ledger_db.clone())?;
+        ledger_db.write_schemas(&schema_batch)?;
+        Ok(())
+    }
+
+    fn create_schema_batch_for_rollback(db: Arc<rockbound::DB>) -> anyhow::Result<SchemaBatch> {
+        let mut schema_batch = SchemaBatch::new();
+        let db = DeltaReader::new(db, Vec::new());
+
+        // Get the current head slot
+        let Some((head_slot_number, head_slot)) = db.get_largest::<SlotByNumber>()? else {
+            tracing::warn!("No slots in database, nothing to rollback");
+            return Ok(schema_batch);
+        };
+
+        tracing::info!(
+            slot_number = %head_slot_number,
+            "Rolling back last slot from ledger database"
+        );
+
+        // Delete all discarded blobs
+        for current_discarded_blob_number in
+            head_slot.discarded_blobs.start.0..head_slot.discarded_blobs.end.0
+        {
+            let current_discarded_blob_number = DiscardedBlobNumber(current_discarded_blob_number);
+            if let Some(current_discarded_blob_hash) =
+                db.get::<DiscardedBlobHahsByNumber>(&current_discarded_blob_number)?
+            {
+                Self::delete_discarded_blob(
+                    &mut schema_batch,
+                    current_discarded_blob_hash,
+                    &current_discarded_blob_number,
+                )?;
+            }
+        }
+
+        // Delete all batches, transactions, and events in this slot.
+        // Missing batch/tx/event entries are treated as DB corruption and cause rollback to fail.
+        // We use range deletes for number-indexed tables (TxByNumber, EventByNumber)
+        // and individual deletes for hash-indexed tables (TxByHash, EventByKey, BatchByHash).
+        if head_slot.batches.start < head_slot.batches.end {
+            let first_batch_num = head_slot.batches.start;
+            let last_batch_num = BatchNumber(head_slot.batches.end.0.saturating_sub(1));
+
+            // Get first and last batches to determine the overall tx range
+            let first_batch = db.get::<BatchByNumber>(&first_batch_num)?;
+            let last_batch = db.get::<BatchByNumber>(&last_batch_num)?;
+            let (first_batch, last_batch) = match (first_batch, last_batch) {
+                (Some(first_batch), Some(last_batch)) => (first_batch, last_batch),
+                (None, None) => {
+                    anyhow::bail!(
+                        "Ledger DB corruption during rollback: missing first and last batch entries for slot {:?} (expected batch range {:?}..{:?})",
+                        head_slot_number,
+                        head_slot.batches.start,
+                        head_slot.batches.end,
+                    );
+                }
+                (None, Some(_)) => {
+                    anyhow::bail!(
+                        "Ledger DB corruption during rollback: missing first batch {:?} for slot {:?} (expected batch range {:?}..{:?})",
+                        first_batch_num,
+                        head_slot_number,
+                        head_slot.batches.start,
+                        head_slot.batches.end,
+                    );
+                }
+                (Some(_), None) => {
+                    anyhow::bail!(
+                        "Ledger DB corruption during rollback: missing last batch {:?} for slot {:?} (expected batch range {:?}..{:?})",
+                        last_batch_num,
+                        head_slot_number,
+                        head_slot.batches.start,
+                        head_slot.batches.end,
+                    );
+                }
+            };
+
+            let tx_range_start = first_batch.txs.start;
+            let tx_range_end = last_batch.txs.end;
+
+            // Process transactions and events if there are any
+            if tx_range_start < tx_range_end {
+                // Get first and last txs to determine overall event range
+                let first_tx = db.get::<TxByNumber>(&tx_range_start)?;
+                let last_tx = db.get::<TxByNumber>(&TxNumber(tx_range_end.0.saturating_sub(1)))?;
+                let (first_tx, last_tx) = match (first_tx, last_tx) {
+                    (Some(first_tx), Some(last_tx)) => (first_tx, last_tx),
+                    (None, None) => {
+                        anyhow::bail!(
+                            "Ledger DB corruption during rollback: missing first and last tx entries for slot {:?} (expected tx range {:?}..{:?})",
+                            head_slot_number,
+                            tx_range_start,
+                            tx_range_end,
+                        );
+                    }
+                    (None, Some(_)) => {
+                        anyhow::bail!(
+                            "Ledger DB corruption during rollback: missing first tx {:?} for slot {:?} (expected tx range {:?}..{:?})",
+                            tx_range_start,
+                            head_slot_number,
+                            tx_range_start,
+                            tx_range_end,
+                        );
+                    }
+                    (Some(_), None) => {
+                        anyhow::bail!(
+                            "Ledger DB corruption during rollback: missing last tx {:?} for slot {:?} (expected tx range {:?}..{:?})",
+                            TxNumber(tx_range_end.0.saturating_sub(1)),
+                            head_slot_number,
+                            tx_range_start,
+                            tx_range_end,
+                        );
+                    }
+                };
+
+                let event_range_start = first_tx.events.start;
+                let event_range_end = last_tx.events.end;
+                debug_assert!(
+                    event_range_start <= event_range_end,
+                    "Event range inverted: start={event_range_start:?} end={event_range_end:?}",
+                );
+
+                // Delete hash-indexed entries by iterating through txs
+                // (we need tx_number to delete EventByKey, and tx.hash to delete TxByHash)
+                for current_tx_number in tx_range_start.0..tx_range_end.0 {
+                    let current_tx_number = TxNumber(current_tx_number);
+
+                    let tx = match db.get::<TxByNumber>(&current_tx_number)? {
+                        Some(tx) => tx,
+                        None => {
+                            anyhow::bail!(
+                                "Ledger DB corruption during rollback: missing tx {:?} for slot {:?} (expected tx range {:?}..{:?})",
+                                current_tx_number,
+                                head_slot_number,
+                                tx_range_start,
+                                tx_range_end,
+                            );
+                        }
+                    };
+
+                    // Delete EventByKey entries for this tx's events
+                    for current_event_number in tx.events.start.0..tx.events.end.0 {
+                        let current_event_number = EventNumber(current_event_number);
+                        let event = match db.get::<EventByNumber>(&current_event_number)? {
+                            Some(event) => event,
+                            None => {
+                                anyhow::bail!(
+                                    "Ledger DB corruption during rollback: missing event {:?} for slot {:?} (tx {:?}, expected event range {:?}..{:?})",
+                                    current_event_number,
+                                    head_slot_number,
+                                    current_tx_number,
+                                    tx.events.start,
+                                    tx.events.end,
+                                );
+                            }
+                        };
+                        schema_batch.delete::<EventByKey>(&(
+                            event.key().clone(),
+                            current_tx_number,
+                            current_event_number,
+                        ))?;
+                    }
+                    // Delete TxByHash entry
+                    schema_batch.delete::<TxByHash>(&(tx.hash, current_tx_number))?;
+                }
+
+                // Range delete EventByNumber (reduces tombstones).
+                // If there are no events in this slot, the range is empty and we skip it.
+                if event_range_start < event_range_end {
+                    schema_batch
+                        .delete_range::<EventByNumber>(&event_range_start, &event_range_end)?;
+                }
+
+                // Range delete TxByNumber (reduces tombstones)
+                schema_batch.delete_range::<TxByNumber>(&tx_range_start, &tx_range_end)?;
+            }
+
+            // Delete BatchByHash individually (hash-indexed)
+            for current_batch_number in head_slot.batches.start.0..head_slot.batches.end.0 {
+                if let Some(batch) = db.get::<BatchByNumber>(&BatchNumber(current_batch_number))? {
+                    schema_batch.delete::<BatchByHash>(&batch.hash)?;
+                }
+            }
+
+            // Range delete BatchByNumber (reduces tombstones)
+            schema_batch
+                .delete_range::<BatchByNumber>(&head_slot.batches.start, &head_slot.batches.end)?;
+        }
+
+        Self::delete_slot(&mut schema_batch, &head_slot, &head_slot_number)?;
+
+        // Check if we need to update the finalized slot.
+        if let Some(finalized_slot) = db.get::<FinalizedSlots>(&LatestFinalizedSlotSingleton)? {
+            if finalized_slot >= head_slot_number {
+                // Find the previous slot number.
+                let new_finalized_slot = if head_slot_number > SlotNumber::GENESIS {
+                    // Get the previous slot
+                    let mut prev_slot = head_slot_number;
+                    prev_slot.decr();
+                    prev_slot
+                } else {
+                    SlotNumber::GENESIS
+                };
+                tracing::info!(
+                    old_finalized_slot = %finalized_slot,
+                    new_finalized_slot = %new_finalized_slot,
+                    "Updating finalized slot during rollback"
+                );
+                schema_batch
+                    .put::<FinalizedSlots>(&LatestFinalizedSlotSingleton, &new_finalized_slot)?;
+            }
+        }
+
+        Ok(schema_batch)
+    }
+
+    fn delete_discarded_blob(
+        schema_batch: &mut SchemaBatch,
+        discarded_blob_hash: [u8; 32],
+        discarded_blob_number: &DiscardedBlobNumber,
+    ) -> anyhow::Result<()> {
+        schema_batch.delete::<DiscardedBlobHahsByNumber>(discarded_blob_number)?;
+        schema_batch.delete::<DiscardedBlobByHash>(&discarded_blob_hash)?;
+        Ok(())
+    }
+
+    fn delete_slot(
+        schema_batch: &mut SchemaBatch,
+        slot: &StoredSlot,
+        slot_number: &SlotNumber,
+    ) -> anyhow::Result<()> {
+        schema_batch.delete::<SlotByNumber>(slot_number)?;
+        schema_batch.delete::<SlotByHash>(&slot.hash)?;
+        Ok(())
     }
 }

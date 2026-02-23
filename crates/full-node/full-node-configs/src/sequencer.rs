@@ -134,6 +134,80 @@ pub enum RecoveryStrategy {
     TryToSave,
 }
 
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize, Eq, PartialEq, JsonSchema)]
+pub enum ConfiguredNodeRole {
+    /// This node runs as the leader. The leader is responsible for producing new batches.
+    Leader,
+    /// This node runs as a replica, syncing its state from the leader.
+    /// Replicas do not publish blobs to the DA layer, do not accept transactions via the API,
+    /// and do not issue soft confirmations.
+    Replica,
+    /// This node runs in replica mode with Postgres-based synchronization from the leader disabled.
+    /// It receives transactions exclusively through the DA layer.
+    /// Use this mode when you want replica behavior without accepting transactions from the Leader only from the DA.
+    ReplicaNoLeaderSync,
+    /// The node initially starts as a `Replica` and attempts to register itself as the `Leader`
+    /// by sending a request to the Db to acquire leadership.
+    /// If successful, it becomes the `Leader` and all other nodes remain Replicas.
+    /// If the Leader goes down and fails to refresh its entry in the `Leader` table,
+    /// one of the `Replicas` will take over and assume the Leader role.
+    DbElected,
+}
+
+/// Configuration for leader election timing.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, Eq, PartialEq, JsonSchema)]
+pub struct LeaderElectionConfig {
+    /// Maximum time in milliseconds without a heartbeat before a leader is considered inactive.
+    #[serde(default = "default_leader_timeout_millis")]
+    pub leader_timeout_millis: u64,
+    /// Minimum time in milliseconds after leader acquisition before another node can take over.
+    /// Prevents rapid leader flapping.
+    #[serde(default = "default_leader_grace_period_millis")]
+    pub grace_period_millis: u64,
+    /// Interval in milliseconds between heartbeat updates.
+    #[serde(default = "default_heartbeat_interval_millis")]
+    pub heartbeat_interval_millis: u64,
+}
+
+impl Default for LeaderElectionConfig {
+    fn default() -> Self {
+        Self {
+            leader_timeout_millis: default_leader_timeout_millis(),
+            grace_period_millis: default_leader_grace_period_millis(),
+            heartbeat_interval_millis: default_heartbeat_interval_millis(),
+        }
+    }
+}
+
+impl LeaderElectionConfig {
+    /// Returns the leader timeout as a `Duration`.
+    pub fn leader_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.leader_timeout_millis)
+    }
+
+    /// Returns the grace period as a `Duration`.
+    pub fn grace_period(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.grace_period_millis)
+    }
+
+    /// Returns the heartbeat interval as a `Duration`.
+    pub fn heartbeat_interval(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.heartbeat_interval_millis)
+    }
+}
+
+const fn default_leader_timeout_millis() -> u64 {
+    500
+}
+
+const fn default_leader_grace_period_millis() -> u64 {
+    10_000
+}
+
+const fn default_heartbeat_interval_millis() -> u64 {
+    100
+}
+
 /// Postgres DB config.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Eq, PartialEq, JsonSchema)]
 pub struct PostgresConfig {
@@ -141,6 +215,11 @@ pub struct PostgresConfig {
     pub postgres_connection_string: String,
     /// Id of the node.
     pub node_id: String,
+    #[allow(missing_docs)]
+    pub node_role: ConfiguredNodeRole,
+    /// Configuration for leader election timing.
+    #[serde(default)]
+    pub leader_election: LeaderElectionConfig,
 }
 
 /// Configuration for [`PreferredSequencer`].
@@ -176,16 +255,9 @@ pub struct PreferredSequencerConfig<Address: Copy> {
     pub recovery_strategy: RecoveryStrategy,
     /// Target time in milliseconds to spend executing all the txs in a single batch. Batches will be closed when they exceed this value.
     pub batch_execution_time_limit_millis: u64,
-    /// When enabled, the sequencer runs in replica mode and cannot accept transactions.
-    /// It will sync from the master sequencer's database but remain read-only.
-    #[serde(default)]
-    pub is_replica: Option<bool>,
     #[serde(default = "default_num_cache_warmup_workers")]
     /// The number of workers that warm up the main executor cache.
     pub num_cache_warmup_workers: usize,
-    /// Configuration for the timing oracle.
-    #[serde(default)]
-    pub timing_oracle: Option<TimingOracleConfig>,
     /// Configuration for rate-limiting the sequencer.
     #[serde(default = "default_rate_limiter::<Address>")]
     pub rate_limiter: Option<SovRateLimiterConfig<Address>>,
@@ -212,14 +284,12 @@ impl<Address: Copy> Default for PreferredSequencerConfig<Address> {
             disable_state_root_consistency_checks: false,
             ideal_lag_behind_finalized_slot: default_ideal_lag_behind_finalized_slot(),
             recovery_strategy: RecoveryStrategy::None,
-            is_replica: Some(false),
             db_event_channel_size: default_db_event_channel_size(),
             batch_execution_time_limit_millis: 6_000, // 6 seconds
             num_cache_warmup_workers: default_num_cache_warmup_workers(),
             maximum_future_nonce_delta: default_maximum_future_nonce_delta(),
             future_nonce_transaction_timeout_millis:
                 default_future_nonce_transaction_timeout_millis(),
-            timing_oracle: None,
             rate_limiter: None,
         }
     }
@@ -266,19 +336,6 @@ pub struct StdSequencerConfig {
     /// Maximum size of a batch. The sequencer will not build batches larger
     /// than this size.
     pub max_batch_size_bytes: Option<NonZero<usize>>,
-}
-
-// Configuration for the timing oracle.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Eq, PartialEq, JsonSchema)]
-pub struct TimingOracleConfig {
-    /// The priority fee percentage that the sequencer will pay for the timestamp oracle update tx.
-    pub priority_fee_percentage: u8,
-    /// The maximum fee that the sequencer will pay for the timestamp oracle update tx.
-    pub max_fee: u64,
-    /// The interval in milliseconds at which the timestamp oracle update tx is submitted.
-    pub interval_millis: u64,
-    /// The private key to use to sign timestamp oracle txs. If none is provided, an ephemeral key will be generated.
-    pub private_key_hex: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Eq, PartialEq, JsonSchema)]

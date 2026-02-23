@@ -42,7 +42,7 @@ use crate::{Gas, GasMeter, GasMeteringError, GasSpec, RevertableTxState, Spec};
 pub trait StateAccessor: StateReaderAndWriter<User> {
     /// Converts this accessor into an [`UnmeteredStateWrapper`]. This method should only be used either in tests or in the `EVM` module.
     #[cfg(any(feature = "test-utils", feature = "evm"))]
-    fn to_unmetered(&mut self) -> UnmeteredStateWrapper<Self>
+    fn to_unmetered(&mut self) -> UnmeteredStateWrapper<'_, Self>
     where
         Self: Sized,
     {
@@ -122,7 +122,7 @@ pub trait TxState<S: Spec>:
     /// Converts this state accessor into a [`RevertableTxState`].
     ///
     /// You *MUST* call .commit() to save the changes from the resulting accessor if you want them to be persisted
-    fn to_revertable(&mut self) -> RevertableTxState<S, Self> {
+    fn to_revertable(&mut self) -> RevertableTxState<'_, S, Self> {
         RevertableTxState::new(self)
     }
 }
@@ -321,7 +321,7 @@ pub trait AccessoryStateReader: UniversalStateAccessor + StateMetricsProvider {}
 /// A trait wrapper that replicates the functionality of [`StateReader`] but with a gas metering interface.
 /// This allows a storage reader to charge gas for read operations.
 pub trait ProvableStateReader<N: ProvableCompileTimeNamespace>:
-    UniversalStateAccessor + GasMeter
+    UniversalStateAccessor + GasMeter + StateMetricsProvider
 {
 }
 
@@ -407,11 +407,11 @@ macro_rules! blanket_impl_metered_state_reader {
     };
 }
 
-impl<T: ProvableStateReader<Kernel> + StateMetricsProvider> StateReader<Kernel> for T {
+impl<T: ProvableStateReader<Kernel>> StateReader<Kernel> for T {
     blanket_impl_metered_state_reader!(Kernel);
 }
 
-impl<T: ProvableStateReader<User> + StateMetricsProvider> StateReader<User> for T {
+impl<T: ProvableStateReader<User>> StateReader<User> for T {
     blanket_impl_metered_state_reader!(User);
 }
 
