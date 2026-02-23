@@ -149,6 +149,14 @@ where
 /// slightly more restrictive traits defined in the module system.
 impl<C: CryptoHelper> CryptoSpecExt for C {}
 
+/// Bundles sequencing data and execution context for [`Context`] construction.
+pub struct SequencingAndExecution {
+    /// Sequencing data provided by the sequencer.
+    pub sequencing_data: Option<Bytes>,
+    /// The execution context of the transaction.
+    pub execution_context: ExecutionContext,
+}
+
 /// The context in which a transaction executes
 
 #[derive(Clone, Debug)]
@@ -233,8 +241,10 @@ impl<S: Spec> Context<S> {
             sequencer,
             sequencer_da_address,
             sender,
-            sequencing_data,
-            execution_context,
+            SequencingAndExecution {
+                sequencing_data,
+                execution_context,
+            },
             sequencer_type,
         )
     }
@@ -246,8 +256,7 @@ impl<S: Spec> Context<S> {
         sequencer: S::Address,
         sequencer_da_address: <S::Da as DaSpec>::Address,
         payer: S::Address,
-        sequencing_data: Option<Bytes>,
-        execution_context: ExecutionContext,
+        sequencing_and_execution: SequencingAndExecution,
         sequencer_type: SequencerType,
     ) -> Self {
         Self {
@@ -256,8 +265,8 @@ impl<S: Spec> Context<S> {
             sequencer,
             sequencer_da_address,
             gas_refund_recipient: payer,
-            sequencing_data,
-            execution_context,
+            sequencing_data: sequencing_and_execution.sequencing_data,
+            execution_context: sequencing_and_execution.execution_context,
             sequencer_type,
         }
     }

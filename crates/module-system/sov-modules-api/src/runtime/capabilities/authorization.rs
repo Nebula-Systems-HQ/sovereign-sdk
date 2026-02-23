@@ -13,6 +13,15 @@ use sov_universal_wallet::UniversalWallet;
 use crate::transaction::Credentials;
 use crate::{Context, SequencerType, Spec, StateAccessor};
 
+/// Parameters for resolving transaction context (sequencing data and execution context).
+#[derive(Clone, Debug)]
+pub struct ResolveContextParams {
+    /// Sequencing data provided by the sequencer.
+    pub sequencing_data: Option<Bytes>,
+    /// The execution context of the transaction.
+    pub execution_context: ExecutionContext,
+}
+
 /// Authorizes transactions to be executed.
 pub trait TransactionAuthorizer<S: Spec> {
     /// Resolves the [`Context`] for a transaction.
@@ -22,8 +31,7 @@ pub trait TransactionAuthorizer<S: Spec> {
         sequencer: &<<S as Spec>::Da as DaSpec>::Address,
         sequencer_rollup_address: S::Address,
         state: &mut impl StateAccessor,
-        sequencing_data: Option<Bytes>,
-        execution_context: ExecutionContext,
+        params: ResolveContextParams,
         sequencer_type: SequencerType,
     ) -> anyhow::Result<Context<S>>;
 

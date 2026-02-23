@@ -55,6 +55,7 @@ pub struct CelestiaService {
 }
 
 impl CelestiaService {
+    #[allow(clippy::too_many_arguments)]
     fn with_client(
         client: celestia_client::Client,
         rollup_batch_namespace: Namespace,

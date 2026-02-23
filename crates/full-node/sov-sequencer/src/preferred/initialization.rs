@@ -46,6 +46,7 @@ where
     }
 
     /// Builds the sequencer instance.
+    #[allow(clippy::too_many_arguments)]
     pub async fn build(
         self,
         state_update_receiver: StateUpdateReceiver<S::Storage>,

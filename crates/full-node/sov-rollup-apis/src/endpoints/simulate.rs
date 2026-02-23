@@ -11,7 +11,7 @@ use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sov_modules_api::capabilities::{
-    AuthorizationData, ChainState, TransactionAuthorizer, UniquenessData,
+    AuthorizationData, ChainState, ResolveContextParams, TransactionAuthorizer, UniquenessData,
 };
 use sov_modules_api::common::Amount;
 use sov_modules_api::macros::config_value;
@@ -441,8 +441,10 @@ impl<S: Spec, R: Runtime<S>> SimulateEndpoint for SovereignSimulate<S, R> {
                 &sequencer.da_address,
                 sequencer.rollup_address,
                 &mut scratchpad,
-                sequencing_metadata,
-                ExecutionContext::Sequencer,
+                ResolveContextParams {
+                    sequencing_data: sequencing_metadata,
+                    execution_context: ExecutionContext::Sequencer,
+                },
                 SequencerType::Preferred,
             )
             .map_err(SimulateError::ContextResolution)?;

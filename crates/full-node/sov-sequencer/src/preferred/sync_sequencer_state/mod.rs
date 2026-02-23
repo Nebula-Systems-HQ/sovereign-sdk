@@ -148,6 +148,7 @@ impl<S: Spec, Rt: Runtime<S>> Message<S, Rt> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create<S, Rt>(
     seq_role: SequencerRole,
     api_ledger_db: LedgerDb,

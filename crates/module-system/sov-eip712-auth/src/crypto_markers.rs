@@ -34,7 +34,6 @@ impl<C: CryptoSpec> CryptoSpec for CryptoSpecWithSecp256k1<C> {
     type Hasher = C::Hasher;
     type PublicKey = C::PublicKey;
     type Signature = C::Signature;
-    #[cfg(feature = "native")]
     type PrivateKey = C::PrivateKey;
 
     fn sovereign_admin_pubkey() -> Self::PublicKey {

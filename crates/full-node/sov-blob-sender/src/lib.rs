@@ -95,6 +95,7 @@ where
     H: BlobSenderHooks<Da = Da::Spec>,
     FM: FinalizationManager,
 {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         da: Da,
         finalization_manager: FM,
@@ -121,6 +122,7 @@ where
         .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn new_with_task_intervals(
         da: Da,
         finalization_manager: FM,

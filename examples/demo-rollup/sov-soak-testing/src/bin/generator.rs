@@ -95,6 +95,7 @@ where
         .await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn worker_task(
     client: sov_api_spec::Client,
     rx: Receiver<bool>,

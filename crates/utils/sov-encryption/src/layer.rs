@@ -403,7 +403,7 @@ impl EncryptionLayer {
                 debug!("📋 PARSED KEY SERVICE: Successfully deserialized KeyUpdate");
                 Ok(key_update)
             }
-            Err(e) => Err(format!("Failed to deserialize KeyUpdate: {}", e)),
+            Err(e) => Err(format!("Failed to deserialize KeyUpdate: {e}")),
         }
     }
 

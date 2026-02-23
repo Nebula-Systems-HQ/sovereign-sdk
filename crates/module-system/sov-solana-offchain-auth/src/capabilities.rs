@@ -49,24 +49,31 @@ where
     type Decodable = <Rt as DispatchCall>::Decodable;
     type Input = SolanaOffchainAuthenticatorInput;
 
-    #[cfg(feature = "native")]
     fn decode_serialized_tx(
         tx: &FullyBakedTx,
     ) -> Result<Self::Decodable, sov_modules_api::capabilities::FatalError> {
-        use crate::authentication::decode_solana_json_tx;
+        #[cfg(feature = "native")]
+        {
+            use crate::authentication::decode_solana_json_tx;
 
-        let auth_variant: SolanaOffchainAuthenticatorInput =
-            borsh::from_slice(&tx.data).map_err(|e| {
-                sov_modules_api::capabilities::FatalError::DeserializationFailed(e.to_string())
-            })?;
+            let auth_variant: SolanaOffchainAuthenticatorInput =
+                borsh::from_slice(&tx.data).map_err(|e| {
+                    sov_modules_api::capabilities::FatalError::DeserializationFailed(e.to_string())
+                })?;
 
-        match auth_variant {
-            SolanaOffchainAuthenticatorInput::Standard(raw_tx) => {
-                sov_modules_api::capabilities::decode_sov_tx::<S, Rt>(&raw_tx.data)
+            match auth_variant {
+                SolanaOffchainAuthenticatorInput::Standard(raw_tx) => {
+                    sov_modules_api::capabilities::decode_sov_tx::<S, Rt>(&raw_tx.data)
+                }
+                SolanaOffchainAuthenticatorInput::SolanaOffchain(raw_tx) => {
+                    decode_solana_json_tx::<S, Rt>(&raw_tx.data)
+                }
             }
-            SolanaOffchainAuthenticatorInput::SolanaOffchain(raw_tx) => {
-                decode_solana_json_tx::<S, Rt>(&raw_tx.data)
-            }
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = tx;
+            unreachable!("decode_serialized_tx is only called with the native feature")
         }
     }
 
@@ -108,17 +115,24 @@ where
         }
     }
 
-    #[cfg(feature = "native")]
     fn compute_tx_hash(
         tx: &sov_modules_api::FullyBakedTx,
     ) -> anyhow::Result<sov_modules_api::TxHash> {
-        let input: SolanaOffchainAuthenticatorInput = borsh::from_slice(&tx.data)?;
+        #[cfg(feature = "native")]
+        {
+            let input: SolanaOffchainAuthenticatorInput = borsh::from_slice(&tx.data)?;
 
-        match input {
-            SolanaOffchainAuthenticatorInput::SolanaOffchain(tx)
-            | SolanaOffchainAuthenticatorInput::Standard(tx) => {
-                Ok(sov_modules_api::capabilities::calculate_hash::<S>(&tx.data))
+            match input {
+                SolanaOffchainAuthenticatorInput::SolanaOffchain(tx)
+                | SolanaOffchainAuthenticatorInput::Standard(tx) => {
+                    Ok(sov_modules_api::capabilities::calculate_hash::<S>(&tx.data))
+                }
             }
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = tx;
+            unreachable!("compute_tx_hash is only called with the native feature")
         }
     }
 

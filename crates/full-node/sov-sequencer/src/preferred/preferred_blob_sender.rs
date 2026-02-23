@@ -27,6 +27,7 @@ pub struct PreferredBlobSender<Da: DaService> {
 }
 
 impl<Da: DaService> PreferredBlobSender<Da> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         da: Da,
         ledger_db: LedgerDb,

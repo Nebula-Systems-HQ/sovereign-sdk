@@ -355,33 +355,6 @@
         }
       }
     },
-    "LeaderElectionConfig": {
-      "description": "Configuration for leader election timing.",
-      "type": "object",
-      "properties": {
-        "grace_period_millis": {
-          "description": "Minimum time in milliseconds after leader acquisition before another node can take over. Prevents rapid leader flapping.",
-          "default": 10000,
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "heartbeat_interval_millis": {
-          "description": "Interval in milliseconds between heartbeat updates.",
-          "default": 100,
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "leader_timeout_millis": {
-          "description": "Maximum time in milliseconds without a heartbeat before a leader is considered inactive.",
-          "default": 500,
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        }
-      }
-    },
     "KeyClientConfig": {
       "oneOf": [
         {
@@ -460,6 +433,33 @@
           }
         }
       ]
+    },
+    "LeaderElectionConfig": {
+      "description": "Configuration for leader election timing.",
+      "type": "object",
+      "properties": {
+        "grace_period_millis": {
+          "description": "Minimum time in milliseconds after leader acquisition before another node can take over. Prevents rapid leader flapping.",
+          "default": 10000,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "heartbeat_interval_millis": {
+          "description": "Interval in milliseconds between heartbeat updates.",
+          "default": 100,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        },
+        "leader_timeout_millis": {
+          "description": "Maximum time in milliseconds without a heartbeat before a leader is considered inactive.",
+          "default": 500,
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
+        }
+      }
     },
     "Limits": {
       "type": "object",

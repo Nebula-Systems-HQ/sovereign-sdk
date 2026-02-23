@@ -239,6 +239,7 @@ where
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_tx_with_maybe_effective_gas_price<Accessor: AccessoryStateReader>(
         &self,
         tx: TxSignedAndRecovered,

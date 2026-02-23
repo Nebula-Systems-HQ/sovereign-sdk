@@ -431,6 +431,7 @@ impl<S: Spec> BlobStorage<S> {
     /// For batches, we select
     /// - The next one sent by the preferred sequencer (if available)
     /// - Any batches which appeared on chain before or during the current *visible* slot number
+    #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(skip_all)]
     fn select_blobs_for_preferred_sequencer<'k, CF: InjectedControlFlow<S> + Clone>(
         &mut self,
