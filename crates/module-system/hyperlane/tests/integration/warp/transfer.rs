@@ -12,7 +12,7 @@ use sov_modules_api::macros::config_value;
 use sov_modules_api::prelude::UnwrapInfallible;
 use sov_modules_api::{HexHash, HexString, SafeVec, Spec, TxEffect, VersionReader};
 use sov_test_utils::runtime::TestRunner;
-use sov_test_utils::{AsUser, TestUser, TransactionTestCase};
+use sov_test_utils::{AsUser, TestUser, TransactionTestCase, TEST_DEFAULT_USER_BALANCE};
 
 use super::runtime::*;
 
@@ -518,6 +518,7 @@ fn test_inbound_transfer_after_ism_update() {
             inbound_limit_replenishment_per_slot: None,
             outbound_transferrable_tokens_limit: None,
             outbound_limit_replenishment_per_slot: None,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(
@@ -851,6 +852,7 @@ fn register_synthetic_route(
             inbound_limit_replenishment_per_slot: Amount::MAX,
             outbound_transferrable_tokens_limit: Amount::MAX,
             outbound_limit_replenishment_per_slot: Amount::MAX,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(
@@ -992,4 +994,331 @@ fn test_synthetic_route_without_scaling() {
         Amount(100),
         Amount(100),
     );
+}
+
+// --- Gas Credit Tests ---
+
+/// The amount each gas credit top-off delivers (target minus genesis balance).
+const GAS_CREDIT_TOP_OFF: Amount = Amount(100_000_000_000);
+
+/// Gas credit target: genesis balance + top-off, so inbound transfers always trigger a credit.
+const GAS_CREDIT_TARGET: Amount = Amount(TEST_DEFAULT_USER_BALANCE.0 + GAS_CREDIT_TOP_OFF.0);
+
+/// How many gas tokens to seed into the route reserve (4x top-off for comfortable margin).
+const GAS_RESERVE_FUND_AMOUNT: Amount = Amount(GAS_CREDIT_TOP_OFF.0 * 4);
+
+/// Default bridge amount for gas credit tests.
+const GAS_CREDIT_BRIDGE_AMOUNT: Amount = Amount(100);
+
+/// Register a synthetic warp route with gas_credit_amount set.
+fn register_synthetic_route_with_gas_credit(
+    runner: &mut TestRunner<RT, S>,
+    admin: &TestUser<S>,
+    gas_credit_amount: Amount,
+) -> (HexHash, TokenId) {
+    let warp_route_id = Arc::new(std::sync::Mutex::new(HexString([0; 32])));
+    let warp_route_id_ref = warp_route_id.clone();
+    let local_token_id = Arc::new(std::sync::Mutex::new(None));
+    let local_token_id_ref = local_token_id.clone();
+    runner.execute_transaction(TransactionTestCase {
+        input: admin.create_plain_message::<RT, Warp<S>>(WarpCallMessage::Register {
+            admin: Admin::InsecureOwner(admin.address()),
+            token_source: TokenKind::Synthetic {
+                remote_token_id: HexString([255; 32]),
+                remote_decimals: 18,
+                local_decimals: None,
+            },
+            ism: Ism::AlwaysTrust,
+            remote_routers: SafeVec::new(),
+            inbound_transferrable_tokens_limit: Amount::MAX,
+            inbound_limit_replenishment_per_slot: Amount::MAX,
+            outbound_transferrable_tokens_limit: Amount::MAX,
+            outbound_limit_replenishment_per_slot: Amount::MAX,
+            gas_credit_amount: Some(gas_credit_amount),
+        }),
+        assert: Box::new(move |result, _| {
+            assert!(
+                result.tx_receipt.is_successful(),
+                "Route registration should succeed"
+            );
+            for event in result.events {
+                if let TestRuntimeEvent::Warp(WarpEvent::RouteRegistered {
+                    route_id,
+                    token_source,
+                    ..
+                }) = event
+                {
+                    *warp_route_id_ref.lock().unwrap() = route_id;
+                    let StoredTokenKind::Synthetic { local_token_id, .. } = token_source else {
+                        panic!("Token source should be synthetic");
+                    };
+                    *local_token_id_ref.lock().unwrap() = Some(local_token_id);
+                }
+            }
+        }),
+    });
+    let route_id = *warp_route_id.lock().unwrap();
+    let token_id = local_token_id.lock().unwrap().unwrap();
+    assert_ne!(
+        route_id,
+        HexString([0; 32]),
+        "Warp route was not registered"
+    );
+    (route_id, token_id)
+}
+
+/// Fund a warp route's gas reserve with gas tokens via the Warp module's FundGasReserve call.
+fn fund_route_gas_reserve(
+    runner: &mut TestRunner<RT, S>,
+    funder: &TestUser<S>,
+    route_id: HexHash,
+    amount: Amount,
+) {
+    runner.execute_transaction(TransactionTestCase {
+        input: funder.create_plain_message::<RT, Warp<S>>(WarpCallMessage::FundGasReserve {
+            warp_route: route_id,
+            amount,
+        }),
+        assert: Box::new(move |result, _| {
+            assert!(
+                result.tx_receipt.is_successful(),
+                "Funding route gas reserve should succeed: {:?}",
+                result.tx_receipt
+            );
+        }),
+    });
+}
+
+#[test]
+fn test_gas_credit_on_inbound_transfer() {
+    let (mut runner, admin, other, relayer) = setup();
+
+    register_relayer_with_dummy_igp(&mut runner, &relayer, CONFIGURED_DOMAIN);
+
+    let (warp_route_id, synthetic_token_id) =
+        register_synthetic_route_with_gas_credit(&mut runner, &admin, GAS_CREDIT_TARGET);
+    enroll_router(&mut runner, &admin, warp_route_id);
+    fund_route_gas_reserve(&mut runner, &admin, warp_route_id, GAS_RESERVE_FUND_AMOUNT);
+
+    // Verify recipient's genesis balance is below the credit target
+    let other_initial_gas = runner.query_state(|state| {
+        let bank = Bank::<S>::default();
+        bank.get_balance_of(&other.address(), config_gas_token_id(), state)
+            .unwrap_infallible()
+            .unwrap_or_default()
+    });
+    assert!(
+        other_initial_gas < GAS_CREDIT_TARGET,
+        "Initial gas balance ({other_initial_gas}) should be below target ({GAS_CREDIT_TARGET})"
+    );
+
+    // Do an inbound transfer of synthetic tokens to the "other" user
+    let message_body = {
+        let mut out = Vec::with_capacity(64);
+        out.extend_from_slice(&other.address().to_sender().0);
+        out.extend_from_slice(&encode_amount(GAS_CREDIT_BRIDGE_AMOUNT).0);
+        out
+    };
+    let message = inbound_message(
+        CONFIGURED_DOMAIN,
+        CONFIGURED_REMOTE_ROUTER_ADDRESS,
+        warp_route_id,
+        message_body,
+    );
+
+    let other_addr = other.address();
+    let other_sender = other.address().to_sender();
+    runner.execute_transaction(TransactionTestCase {
+        input: admin.create_plain_message::<RT, Mailbox<S, Warp<S>>>(CallMessage::Process {
+            metadata: HexString(vec![].try_into().unwrap()),
+            message: HexString(message.encode().0.try_into().unwrap()),
+        }),
+        assert: Box::new(move |result, state| {
+            assert!(
+                result.tx_receipt.is_successful(),
+                "Inbound transfer should succeed: {:?}",
+                result.tx_receipt
+            );
+
+            // Check GasCredited event was emitted
+            assert!(
+                result.events.iter().any(|event| matches!(
+                    event,
+                    TestRuntimeEvent::Warp(WarpEvent::GasCredited {
+                        route_id,
+                        recipient,
+                        ..
+                    }) if route_id == &warp_route_id && recipient == &other_sender
+                )),
+                "GasCredited event should be emitted"
+            );
+
+            // Check recipient received synthetic tokens
+            let bank = Bank::<S>::default();
+            let synth_balance = bank
+                .get_balance_of(&other_addr, synthetic_token_id, state)
+                .unwrap_infallible()
+                .unwrap_or_default();
+            assert_eq!(
+                synth_balance, GAS_CREDIT_BRIDGE_AMOUNT,
+                "Should receive synthetic tokens"
+            );
+
+            // Check recipient's gas balance was topped up to target
+            let gas_balance = bank
+                .get_balance_of(&other_addr, config_gas_token_id(), state)
+                .unwrap_infallible()
+                .unwrap_or_default();
+            assert_eq!(
+                gas_balance, GAS_CREDIT_TARGET,
+                "Gas balance should be topped up to target"
+            );
+        }),
+    });
+}
+
+#[test]
+fn test_gas_credit_no_double_credit() {
+    let (mut runner, admin, other, relayer) = setup();
+
+    register_relayer_with_dummy_igp(&mut runner, &relayer, CONFIGURED_DOMAIN);
+
+    let (warp_route_id, _synthetic_token_id) =
+        register_synthetic_route_with_gas_credit(&mut runner, &admin, GAS_CREDIT_TARGET);
+    enroll_router(&mut runner, &admin, warp_route_id);
+
+    fund_route_gas_reserve(&mut runner, &admin, warp_route_id, GAS_RESERVE_FUND_AMOUNT);
+
+    // Helper to do an inbound bridge
+    let do_bridge = |runner: &mut TestRunner<RT, S>| {
+        let message_body = {
+            let mut out = Vec::with_capacity(64);
+            out.extend_from_slice(&other.address().to_sender().0);
+            out.extend_from_slice(&encode_amount(GAS_CREDIT_BRIDGE_AMOUNT).0);
+            out
+        };
+        let message = inbound_message(
+            CONFIGURED_DOMAIN,
+            CONFIGURED_REMOTE_ROUTER_ADDRESS,
+            warp_route_id,
+            message_body,
+        );
+        runner.execute_transaction(TransactionTestCase {
+            input: admin.create_plain_message::<RT, Mailbox<S, Warp<S>>>(CallMessage::Process {
+                metadata: HexString(vec![].try_into().unwrap()),
+                message: HexString(message.encode().0.try_into().unwrap()),
+            }),
+            assert: Box::new(move |result, _| {
+                assert!(
+                    result.tx_receipt.is_successful(),
+                    "Inbound transfer should succeed: {:?}",
+                    result.tx_receipt
+                );
+            }),
+        });
+    };
+
+    do_bridge(&mut runner);
+
+    // Record gas balance after first bridge
+    let gas_after_first = runner.query_state(|state| {
+        let bank = Bank::<S>::default();
+        bank.get_balance_of(&other.address(), config_gas_token_id(), state)
+            .unwrap_infallible()
+            .unwrap_or_default()
+    });
+
+    // Second inbound transfer - should NOT credit again since balance is already at/above target
+    do_bridge(&mut runner);
+
+    let gas_after_second = runner.query_state(|state| {
+        let bank = Bank::<S>::default();
+        bank.get_balance_of(&other.address(), config_gas_token_id(), state)
+            .unwrap_infallible()
+            .unwrap_or_default()
+    });
+
+    assert_eq!(
+        gas_after_first, gas_after_second,
+        "Gas balance should not change on second bridge (already at/above target)"
+    );
+}
+
+#[test]
+fn test_gas_credit_depleted_reserve_bridge_succeeds() {
+    let (mut runner, admin, other, relayer) = setup();
+
+    register_relayer_with_dummy_igp(&mut runner, &relayer, CONFIGURED_DOMAIN);
+
+    // Target above genesis balance so credit is attempted, but do NOT fund the route
+    let (warp_route_id, synthetic_token_id) =
+        register_synthetic_route_with_gas_credit(&mut runner, &admin, GAS_CREDIT_TARGET);
+    enroll_router(&mut runner, &admin, warp_route_id);
+
+    // Record initial gas balance
+    let gas_before = runner.query_state(|state| {
+        let bank = Bank::<S>::default();
+        bank.get_balance_of(&other.address(), config_gas_token_id(), state)
+            .unwrap_infallible()
+            .unwrap_or_default()
+    });
+
+    // Inbound transfer should still succeed even though gas credit will fail
+    let message_body = {
+        let mut out = Vec::with_capacity(64);
+        out.extend_from_slice(&other.address().to_sender().0);
+        out.extend_from_slice(&encode_amount(GAS_CREDIT_BRIDGE_AMOUNT).0);
+        out
+    };
+    let message = inbound_message(
+        CONFIGURED_DOMAIN,
+        CONFIGURED_REMOTE_ROUTER_ADDRESS,
+        warp_route_id,
+        message_body,
+    );
+
+    let other_addr = other.address();
+    runner.execute_transaction(TransactionTestCase {
+        input: admin.create_plain_message::<RT, Mailbox<S, Warp<S>>>(CallMessage::Process {
+            metadata: HexString(vec![].try_into().unwrap()),
+            message: HexString(message.encode().0.try_into().unwrap()),
+        }),
+        assert: Box::new(move |result, state| {
+            assert!(
+                result.tx_receipt.is_successful(),
+                "Inbound transfer should succeed even if gas credit fails: {:?}",
+                result.tx_receipt
+            );
+
+            // No GasCredited event should be emitted
+            assert!(
+                !result.events.iter().any(|event| matches!(
+                    event,
+                    TestRuntimeEvent::Warp(WarpEvent::GasCredited { .. })
+                )),
+                "GasCredited event should NOT be emitted when reserve is depleted"
+            );
+
+            // Recipient should still receive synthetic tokens
+            let bank = Bank::<S>::default();
+            let synth_balance = bank
+                .get_balance_of(&other_addr, synthetic_token_id, state)
+                .unwrap_infallible()
+                .unwrap_or_default();
+            assert_eq!(
+                synth_balance, GAS_CREDIT_BRIDGE_AMOUNT,
+                "Should still receive synthetic tokens"
+            );
+
+            // Gas balance should be unchanged
+            let gas_after = bank
+                .get_balance_of(&other_addr, config_gas_token_id(), state)
+                .unwrap_infallible()
+                .unwrap_or_default();
+            assert_eq!(
+                gas_before, gas_after,
+                "Gas balance should be unchanged when reserve is depleted"
+            );
+        }),
+    });
 }

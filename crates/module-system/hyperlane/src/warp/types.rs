@@ -375,6 +375,10 @@ pub struct WarpRouteInstance<S: Spec> {
     pub inbound_rate_limiter: RateLimiter,
     /// Outbound transfers rate limiter.
     pub outbound_rate_limiter: RateLimiter,
+    /// Target gas token balance for bridge recipients. If set, the route
+    /// will transfer gas tokens from its reserve to top off recipients
+    /// whose gas balance is below this amount on inbound transfers.
+    pub gas_credit_amount: Option<Amount>,
 }
 
 #[derive(

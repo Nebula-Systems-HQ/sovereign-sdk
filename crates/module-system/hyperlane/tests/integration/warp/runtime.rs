@@ -167,6 +167,7 @@ pub fn register_warp_route_with_ism_and_token_source_and_rate_limiter(
             inbound_limit_replenishment_per_slot: limit_replenishment_per_slot,
             outbound_transferrable_tokens_limit: transferrable_tokens_limit,
             outbound_limit_replenishment_per_slot: limit_replenishment_per_slot,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(

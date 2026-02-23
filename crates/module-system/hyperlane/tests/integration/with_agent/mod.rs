@@ -448,6 +448,7 @@ async fn test_warp_transfer_back_and_forth_with_evm_counterparty(
         inbound_limit_replenishment_per_slot: Amount::MAX,
         outbound_transferrable_tokens_limit: Amount::MAX,
         outbound_limit_replenishment_per_slot: Amount::MAX,
+        gas_credit_amount: None,
     });
     let register_tx = encode_call(relayer.private_key(), &register_call);
     submit_tx(rollup.api_client(), register_tx).await;
