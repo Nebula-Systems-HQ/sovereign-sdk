@@ -56,8 +56,8 @@ where
         {
             use crate::authentication::decode_solana_json_tx;
 
-            let auth_variant: SolanaOffchainAuthenticatorInput =
-                borsh::from_slice(&tx.data).map_err(|e| {
+            let auth_variant: SolanaOffchainAuthenticatorInput = borsh::from_slice(&tx.data)
+                .map_err(|e| {
                     sov_modules_api::capabilities::FatalError::DeserializationFailed(e.to_string())
                 })?;
 

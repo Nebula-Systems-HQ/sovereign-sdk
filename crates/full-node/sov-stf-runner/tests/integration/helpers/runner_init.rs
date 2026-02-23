@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use sov_full_node_configs::runner::StfConfig;
 
-
 use crate::helpers::hash_stf::HashStf;
 use axum::async_trait;
 use futures::stream::BoxStream;

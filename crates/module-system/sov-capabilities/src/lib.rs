@@ -8,8 +8,8 @@ use sov_chain_state::ChainState as ChainStateModule;
 #[cfg(feature = "native")]
 use sov_modules_api::capabilities::HasKernel;
 use sov_modules_api::capabilities::{
-    AuthorizationData, GasEnforcer, ProofProcessor, ResolveContextParams,
-    SequencerAuthorization, SequencerRemuneration, SequencingDataHandler, TransactionAuthorizer,
+    AuthorizationData, GasEnforcer, ProofProcessor, ResolveContextParams, SequencerAuthorization,
+    SequencerRemuneration, SequencingDataHandler, TransactionAuthorizer,
 };
 use sov_modules_api::transaction::{
     AuthenticatedTransactionData, ProverReward, RemainingFunds, SequencerReward,

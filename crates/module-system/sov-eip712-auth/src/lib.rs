@@ -95,9 +95,10 @@ where
     ) -> Result<Self::Decodable, sov_modules_api::capabilities::FatalError> {
         #[cfg(feature = "native")]
         {
-            let auth_variant: Eip712AuthenticatorInput = borsh::from_slice(&tx.data).map_err(|e| {
-                sov_modules_api::capabilities::FatalError::DeserializationFailed(e.to_string())
-            })?;
+            let auth_variant: Eip712AuthenticatorInput =
+                borsh::from_slice(&tx.data).map_err(|e| {
+                    sov_modules_api::capabilities::FatalError::DeserializationFailed(e.to_string())
+                })?;
 
             match auth_variant {
                 Eip712AuthenticatorInput::Standard(raw_tx) => {
