@@ -424,7 +424,7 @@ mod tests {
     use sov_test_utils::storage::SimpleStorageManager;
     use sov_test_utils::{MockDaSpec, MockZkvm};
 
-    type TestSpec = crate::default_spec::DefaultSpec<MockDaSpec, MockZkvm, MockZkvm, Native>;
+    type TestSpec = crate::default_spec::DefaultNomtSpec<MockDaSpec, MockZkvm, MockZkvm, Native>;
 
     #[test]
     fn test_no_layers_direct_access() {
