@@ -1501,12 +1501,7 @@ mod tests {
         let gas_limit = <TestSpec as Spec>::Gas::ZEROED;
         let biller = MockBiller::with_balance(Amount::MAX);
         layered_state
-            .add_revertable_layer_with_gas_payer(
-                gas_payer.clone(),
-                gas_limit,
-                &biller,
-                &mut billing_state,
-            )
+            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &biller, &mut billing_state)
             .unwrap();
         println!(
             "Added layer with gas payer, now {} layers",
@@ -1735,7 +1730,7 @@ mod tests {
         if let Some(meter) = layered_state.inner.try_as_basic_gas_meter() {
             meter.charge_gas(gas_to_charge).expect("Should charge gas");
         }
-        layered_state.track_gas_in_layer(gas_to_charge);
+        let _ = layered_state.track_gas_in_layer(gas_to_charge);
         println!("Charged gas: {:?}", gas_to_charge);
 
         // Commit the layer WITH BILLING
@@ -1968,7 +1963,7 @@ mod tests {
         );
 
         let result = layered_state.add_revertable_layer_with_gas_payer(
-            gas_payer.clone(),
+            gas_payer,
             excessive_gas_limit,
             &biller,
             &mut billing_state,
@@ -2094,7 +2089,7 @@ mod tests {
 
         // Track gas consumed in layer
         let gas_consumed = <TestSpec as Spec>::Gas::from([20u64, 20u64]);
-        layered_state.track_gas_in_layer(gas_consumed);
+        let _ = layered_state.track_gas_in_layer(gas_consumed);
         println!("Charged gas: {:?}", gas_consumed);
 
         // Now commit with billing
@@ -2163,7 +2158,7 @@ mod tests {
         }
 
         let gas_consumed = <TestSpec as Spec>::Gas::from([30u64, 30u64]);
-        layered_state.track_gas_in_layer(gas_consumed);
+        let _ = layered_state.track_gas_in_layer(gas_consumed);
         println!("Charged gas: {:?}", gas_consumed);
 
         // Revert with billing - gas should still be charged!

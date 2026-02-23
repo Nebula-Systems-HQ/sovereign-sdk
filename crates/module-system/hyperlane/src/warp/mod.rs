@@ -110,6 +110,9 @@ pub enum CallMessage<S: Spec> {
         /// Usually this should be set to a value which allows full limit recovery each day,
         /// so `transferrable_tokens_limit / DA_SLOTS_PER_DAY`.
         outbound_limit_replenishment_per_slot: Amount,
+        /// Target gas token balance for bridge recipients. If set, the route will transfer gas
+        /// tokens from its reserve to top off recipients on inbound transfers.
+        gas_credit_amount: Option<Amount>,
     },
     /// Update an existing route with new admin or ISM.
     Update {
@@ -127,6 +130,9 @@ pub enum CallMessage<S: Spec> {
         outbound_transferrable_tokens_limit: Option<Amount>,
         /// Defines how many tokens are added to the outbound transferrable limit at each visible slot.
         outbound_limit_replenishment_per_slot: Option<Amount>,
+        /// Update gas credit amount. `Some(Some(amount))` sets it, `Some(None)` disables it,
+        /// `None` leaves it unchanged.
+        gas_credit_amount: Option<Option<Amount>>,
     },
     /// Add a counterparty router on another chain. This router is trusted. A malicious remote router can steal funds.
     /// Each warp route can have at most one remote router for a given destination domain.
@@ -159,6 +165,14 @@ pub enum CallMessage<S: Spec> {
         relayer: Option<S::Address>,
         /// A limit for the payment to relayer to cover gas needed for message delivery.
         gas_payment_limit: Amount,
+    },
+    /// Fund a warp route's gas reserve with gas tokens. The sender's gas tokens are transferred
+    /// to the route's derived holder, which is used to top off bridge recipients.
+    FundGasReserve {
+        /// The ID of the warp route to fund.
+        warp_route: WarpRouteId,
+        /// The amount of gas tokens to deposit.
+        amount: Amount,
     },
 }
 
@@ -260,6 +274,24 @@ pub enum Event<S: Spec> {
         /// The amount transferred, in *local* token units.
         amount: Amount,
     },
+    /// Gas reserve was funded for a warp route.
+    GasReserveFunded {
+        /// The ID of the warp route.
+        route_id: WarpRouteId,
+        /// The funder who deposited gas tokens.
+        funder: HexHash,
+        /// The amount of gas tokens deposited.
+        amount: Amount,
+    },
+    /// Gas tokens were credited to a bridge recipient from the route's reserve.
+    GasCredited {
+        /// The ID of the warp route.
+        route_id: WarpRouteId,
+        /// The recipient who received the gas credit.
+        recipient: HexHash,
+        /// The amount of gas tokens credited.
+        amount: Amount,
+    },
 }
 
 impl<S: Spec> Module for Warp<S>
@@ -288,6 +320,7 @@ where
                 inbound_limit_replenishment_per_slot,
                 outbound_transferrable_tokens_limit,
                 outbound_limit_replenishment_per_slot,
+                gas_credit_amount,
             } => {
                 self.register(
                     admin,
@@ -298,6 +331,7 @@ where
                     inbound_limit_replenishment_per_slot,
                     outbound_transferrable_tokens_limit,
                     outbound_limit_replenishment_per_slot,
+                    gas_credit_amount,
                     context,
                     state,
                 )?;
@@ -310,6 +344,7 @@ where
                 inbound_limit_replenishment_per_slot,
                 outbound_transferrable_tokens_limit,
                 outbound_limit_replenishment_per_slot,
+                gas_credit_amount,
             } => {
                 self.update(
                     warp_route,
@@ -319,6 +354,7 @@ where
                     inbound_limit_replenishment_per_slot,
                     outbound_transferrable_tokens_limit,
                     outbound_limit_replenishment_per_slot,
+                    gas_credit_amount,
                     context,
                     state,
                 )?;
@@ -341,6 +377,9 @@ where
                 remote_domain,
             } => {
                 self.unenroll_remote_router(warp_route, remote_domain, context, state)?;
+            }
+            CallMessage::FundGasReserve { warp_route, amount } => {
+                self.fund_gas_reserve(warp_route, amount, context, state)?;
             }
             CallMessage::TransferRemote {
                 warp_route,
@@ -411,6 +450,7 @@ where
         inbound_limit_replenishment_per_slot: Amount,
         outbound_transferrable_tokens_limit: Amount,
         outbound_limit_replenishment_per_slot: Amount,
+        gas_credit_amount: Option<Amount>,
         context: &Context<S>,
         state: &mut impl TxState<S>,
     ) -> anyhow::Result<()> {
@@ -464,6 +504,7 @@ where
                 outbound_limit_replenishment_per_slot,
                 state,
             ),
+            gas_credit_amount,
         };
 
         self.emit_event(
@@ -509,6 +550,7 @@ where
         inbound_limit_replenishment_per_slot: Option<Amount>,
         outbound_transferrable_tokens_limit: Option<Amount>,
         outbound_limit_replenishment_per_slot: Option<Amount>,
+        gas_credit_amount: Option<Option<Amount>>,
         context: &Context<S>,
         state: &mut impl TxState<S>,
     ) -> anyhow::Result<()> {
@@ -525,10 +567,14 @@ where
             || inbound_limit_replenishment_per_slot.is_some();
         let outbound_rate_limit_updated = outbound_transferrable_tokens_limit.is_some()
             || outbound_limit_replenishment_per_slot.is_some();
+        let gas_credit_updated = gas_credit_amount.is_some();
 
         anyhow::ensure!(
-            admin_or_ism_updated || inbound_rate_limit_updated || outbound_rate_limit_updated,
-            "Update should contain new admin, ism, or rate limit settings"
+            admin_or_ism_updated
+                || inbound_rate_limit_updated
+                || outbound_rate_limit_updated
+                || gas_credit_updated,
+            "Update should contain new admin, ism, rate limit, or gas credit settings"
         );
 
         // Check if the request is properly authorized
@@ -611,6 +657,11 @@ where
             });
         }
 
+        // Update gas credit amount
+        if let Some(new_gas_credit) = gas_credit_amount {
+            route.gas_credit_amount = new_gas_credit;
+        }
+
         // save the new state and emit events.
         route.save(state)?;
         for event in events {
@@ -637,6 +688,41 @@ where
             holder.to_payable(), // The mint authority is the warp route
             state,
         )?)
+    }
+
+    /// Fund a warp route's gas reserve by transferring gas tokens from the sender to the route's
+    /// derived holder. Anyone can fund any route's gas reserve.
+    fn fund_gas_reserve(
+        &mut self,
+        route_id: WarpRouteId,
+        amount: Amount,
+        context: &Context<S>,
+        state: &mut impl TxState<S>,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.warp_routes.get(&route_id, state)?.is_some(),
+            "Warp route {} not found",
+            route_id
+        );
+        let route_holder: DerivedHolder = route_id.0.into();
+        self.bank.transfer_from(
+            context.sender(),
+            route_holder.to_payable(),
+            Coins {
+                amount,
+                token_id: config_gas_token_id(),
+            },
+            state,
+        )?;
+        self.emit_event(
+            state,
+            Event::GasReserveFunded {
+                route_id,
+                funder: context.sender().to_sender(),
+                amount,
+            },
+        );
+        Ok(())
     }
 
     /// "Enroll" a remote router on another chain. Whenever this route needs to send/receive funds on that chain,
@@ -1028,6 +1114,47 @@ where
                 )?;
             }
         };
+
+        // Gas credit: top off the recipient's gas token balance from the route's reserve.
+        // Skip for Native routes (the bridged token IS the gas token).
+        if let Some(target_gas) = route.gas_credit_amount {
+            if !matches!(route.token_source, StoredTokenKind::Native) {
+                let current = self
+                    .bank
+                    .get_balance_of(&token_recipient, config_gas_token_id(), state)
+                    .unwrap_or(None)
+                    .unwrap_or_default();
+                if current < target_gas {
+                    let top_off = Amount(target_gas.0 - current.0);
+                    // Non-fatal: if the route reserve is depleted, the bridge still succeeds
+                    match self.bank.transfer_from(
+                        route_token_holder.to_payable(),
+                        &token_recipient,
+                        Coins {
+                            amount: top_off,
+                            token_id: config_gas_token_id(),
+                        },
+                        state,
+                    ) {
+                        Ok(()) => {
+                            self.emit_event(
+                                state,
+                                Event::GasCredited {
+                                    route_id: *route_id,
+                                    recipient: token_recipient_hex,
+                                    amount: top_off,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Gas credit failed for route {route_id} (reserve may be depleted): {e}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         self.emit_event(
             state,

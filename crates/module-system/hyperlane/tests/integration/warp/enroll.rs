@@ -249,6 +249,7 @@ fn test_register_warp_route_duplicate_registrations_fail() {
             inbound_limit_replenishment_per_slot: Amount::MAX,
             outbound_transferrable_tokens_limit: Amount::MAX,
             outbound_limit_replenishment_per_slot: Amount::MAX,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             match result.tx_receipt {
@@ -281,6 +282,7 @@ fn test_enroll_remote_routers_on_registration() {
             inbound_limit_replenishment_per_slot: Amount::MAX,
             outbound_transferrable_tokens_limit: Amount::MAX,
             outbound_limit_replenishment_per_slot: Amount::MAX,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(
@@ -332,6 +334,7 @@ fn test_enroll_remote_routers_on_registration_fails_on_duplicates() {
             inbound_limit_replenishment_per_slot: Amount::MAX,
             outbound_transferrable_tokens_limit: Amount::MAX,
             outbound_limit_replenishment_per_slot: Amount::MAX,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             match result.tx_receipt {
@@ -362,6 +365,7 @@ fn test_warp_route_updates() {
             inbound_limit_replenishment_per_slot: None,
             outbound_transferrable_tokens_limit: None,
             outbound_limit_replenishment_per_slot: None,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(
@@ -382,6 +386,7 @@ fn test_warp_route_updates() {
             inbound_limit_replenishment_per_slot: None,
             outbound_transferrable_tokens_limit: None,
             outbound_limit_replenishment_per_slot: None,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(
@@ -412,6 +417,7 @@ fn test_warp_route_updates() {
             inbound_limit_replenishment_per_slot: None,
             outbound_transferrable_tokens_limit: None,
             outbound_limit_replenishment_per_slot: None,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(
@@ -440,6 +446,7 @@ fn test_warp_route_updates() {
             inbound_limit_replenishment_per_slot: Some(Amount(4321)),
             outbound_transferrable_tokens_limit: Some(Amount(1234)),
             outbound_limit_replenishment_per_slot: Some(Amount(4321)),
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(
@@ -495,6 +502,7 @@ fn test_warp_route_updates() {
                 inbound_limit_replenishment_per_slot: None,
                 outbound_transferrable_tokens_limit: None,
                 outbound_limit_replenishment_per_slot: None,
+                gas_credit_amount: None,
             }),
             assert: Box::new(move |result, _| {
                 assert!(
@@ -522,6 +530,7 @@ fn test_warp_route_independent_limits() {
             inbound_limit_replenishment_per_slot: Some(Amount(4321)),
             outbound_transferrable_tokens_limit: None,
             outbound_limit_replenishment_per_slot: None,
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(
@@ -557,6 +566,7 @@ fn test_warp_route_independent_limits() {
             inbound_limit_replenishment_per_slot: None,
             outbound_transferrable_tokens_limit: Some(Amount(1234)),
             outbound_limit_replenishment_per_slot: Some(Amount(4321)),
+            gas_credit_amount: None,
         }),
         assert: Box::new(move |result, _| {
             assert!(
@@ -599,6 +609,7 @@ fn test_warp_route_limit_updates() {
                 inbound_limit_replenishment_per_slot: replenishment,
                 outbound_transferrable_tokens_limit: max,
                 outbound_limit_replenishment_per_slot: replenishment,
+                gas_credit_amount: None,
             }),
             assert: Box::new(move |result, _| {
                 assert!(

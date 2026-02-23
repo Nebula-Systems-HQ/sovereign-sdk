@@ -171,6 +171,7 @@ pub fn register_warp_route_gasless(
                 inbound_limit_replenishment_per_slot: Amount::MAX,
                 outbound_transferrable_tokens_limit: Amount::MAX,
                 outbound_limit_replenishment_per_slot: Amount::MAX,
+                gas_credit_amount: None,
             }),
             key: user.private_key.clone(),
             details: TxDetails {
