@@ -96,4 +96,4 @@ jobs:
       - name: Run tests
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=mold"
-        run: cargo nextest run --workspace --exclude sov-demo-rollup --exclude sov-celestia-adapter --exclude py_sovereign_web3
+        run: cargo nextest run --workspace --exclude sov-demo-rollup --exclude sov-celestia-adapter --no-fail-fast
