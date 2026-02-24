@@ -129,11 +129,11 @@ impl<S: Spec> Module for Bank<S> {
                 Ok(())
             }
 
-            call::CallMessage::Transfer { to, coins } => {
-                Ok(self.transfer(&to, coins, context, state)?)
+            call::CallMessage::Transfer { .. } => {
+                anyhow::bail!("Direct token transfers via sov-bank are disabled. Use sync-tokens instead.")
             }
-            call::CallMessage::TransferWithMemo { to, coins, memo } => {
-                Ok(self.transfer_with_memo(&to, coins, Some(memo.into()), context, state)?)
+            call::CallMessage::TransferWithMemo { .. } => {
+                anyhow::bail!("Direct token transfers via sov-bank are disabled. Use sync-tokens instead.")
             }
             call::CallMessage::Burn { coins } => Ok(self.burn_from_eoa(coins, context, state)?),
             call::CallMessage::Mint {
