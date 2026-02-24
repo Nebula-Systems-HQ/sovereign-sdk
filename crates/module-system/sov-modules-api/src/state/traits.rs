@@ -19,11 +19,11 @@ use tracing::{enabled, instrument, Level, Span};
 use super::accessors::seal::UniversalStateAccessor;
 use super::accessors::{BorshSerializedSize, TempCache};
 use crate::capabilities::RollupHeight;
+use crate::state::accessors::LayeredRevertableTxState;
 use crate::state::accessors::StateMetricsProvider;
 #[cfg(any(feature = "test-utils", feature = "evm"))]
 use crate::UnmeteredStateWrapper;
 use crate::{Gas, GasMeter, GasMeteringError, GasSpec, RevertableTxState, Spec};
-use crate::state::accessors::LayeredRevertableTxState;
 
 /// A type that can both read and write the normal "user-space" state of the rollup.
 ///
