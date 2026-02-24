@@ -9,8 +9,8 @@ use serde_with::serde_as;
 
 use crate::Bytes;
 
-/// Maximum allowed size for a raw transaction in bytes (1MB default)
-pub const MAX_RAW_TX_SIZE: usize = 1024 * 1024;
+/// Maximum allowed size for a raw transaction in bytes (10KB)
+pub const MAX_RAW_TX_SIZE: usize = 10 * 1024;
 
 /// Maximum allowed size for a fully baked transaction in bytes 1.05MB default
 pub const MAX_FULLY_BAKED_TX_SIZE: usize = (1024 + 50) * 1024;
