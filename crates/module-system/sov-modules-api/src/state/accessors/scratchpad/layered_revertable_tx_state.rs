@@ -263,15 +263,8 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         // Phase 1: Read meter values (borrow meter, extract values, drop borrow)
         let (remaining_gas, remaining_funds, gas_cost) = {
             let meter = match self.inner.try_as_basic_gas_meter() {
-                Some(m) => {
-                    tracing::info!(
-                        "=== GAS_PAYER_DEBUG: validate_and_swap - meter EXISTS. remaining_gas={:?}, remaining_funds={:?}, gas_price={:?} ===",
-                        m.remaining_gas, m.remaining_funds, m.gas_price
-                    );
-                    m
-                }
+                Some(m) => m,
                 None => {
-                    tracing::info!("=== GAS_PAYER_DEBUG: validate_and_swap - NO gas meter! Creating minimal snapshot ===");
                     // No gas meter means no gas tracking - create a minimal snapshot
                     return Ok(GasSnapshot {
                         outer_remaining_gas: S::Gas::MAX,
@@ -351,42 +344,20 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         sequencer: &S::Address,
     ) -> Result<(), GasBillingError> {
         let Some(info) = info else {
-            tracing::info!("=== GAS_PAYER_DEBUG: apply_gas_billing - no billing info, skipping ===");
             return Ok(());
         };
-
-        tracing::info!(
-            "=== GAS_PAYER_DEBUG: apply_gas_billing - gas_payer={:?}, gas_consumed={:?}, snapshot_outer_remaining_gas={:?}, snapshot_outer_remaining_funds={:?} ===",
-            info.gas_payer, info.gas_consumed, info.gas_snapshot.outer_remaining_gas, info.gas_snapshot.outer_remaining_funds
-        );
 
         // Phase 1: Calculate gas cost (borrow meter, extract price, drop)
         let gas_cost = {
             match self.inner.try_as_basic_gas_meter() {
-                Some(meter) => {
-                    let cost = info.gas_consumed.value(meter.gas_price);
-                    tracing::info!(
-                        "=== GAS_PAYER_DEBUG: apply_gas_billing - gas_price={:?}, gas_cost={:?} ===",
-                        meter.gas_price, cost
-                    );
-                    cost
-                }
-                None => {
-                    tracing::info!("=== GAS_PAYER_DEBUG: apply_gas_billing - NO gas meter for cost calc, gas_cost=ZERO ===");
-                    Amount::ZERO
-                }
+                Some(meter) => info.gas_consumed.value(meter.gas_price),
+                None => Amount::ZERO,
             }
         }; // meter borrow dropped
 
         // Phase 2: Transfer tokens (borrow self.inner as StateAccessor)
         if gas_cost > Amount::ZERO {
-            tracing::info!(
-                "=== GAS_PAYER_DEBUG: apply_gas_billing - transferring {} from {:?} to sequencer {:?} ===",
-                gas_cost, info.gas_payer, sequencer
-            );
             biller.transfer_gas_tokens(&info.gas_payer, sequencer, gas_cost, self.inner)?;
-        } else {
-            tracing::info!("=== GAS_PAYER_DEBUG: apply_gas_billing - gas_cost is ZERO, skipping transfer ===");
         }
 
         // Phase 3: Restore outer payer's meter state (borrow meter again)
