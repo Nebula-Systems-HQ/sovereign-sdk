@@ -45,12 +45,12 @@ use sov_rollup_interface::node::{DaSyncState, SyncStatus};
 use sov_rollup_interface::storage::HierarchicalStorageManager;
 use sov_rollup_interface::zk::ZkvmHost;
 use sov_rollup_interface::StateUpdateInfo;
-use sov_sequencer::preferred::{PostgresConfig, PreferredSequencerConfig, TimingOracleConfig};
+use sov_sequencer::preferred::{ConfiguredNodeRole, PostgresConfig, PreferredSequencerConfig};
 use sov_sequencer::test_stateless::TestStatelessSequencer;
 use sov_sequencer::SeqConfigExtension;
 use sov_sequencer::{
-    SequencerApis, SequencerConfig, SequencerKindConfig, SovRateLimiterConfig,
-    StateUpdateNotification,
+    ForcedTxBatchNotification, SequencerApis, SequencerConfig, SequencerKindConfig, SequencerRole,
+    SovRateLimiterConfig, StateUpdateNotification,
 };
 pub use sov_stf_runner::processes::RollupProverConfig;
 use sov_stf_runner::{
@@ -117,7 +117,6 @@ pub struct RollupBuilderConfig<S: Spec> {
     pub start_at_rollup_height: Option<RollupHeight>,
     pub stop_at_rollup_height: Option<RollupHeight>,
     pub extension: Option<SeqConfigExtension>,
-    pub separate_archival_db: bool,
 }
 
 /// A one-stop shop for building entire rollups and starting them in the
@@ -152,6 +151,16 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
         self
     }
 
+    /// Sets the node role to Leader for the Postgres configuration.
+    /// Used when a replica node needs to transition to leader role.
+    pub fn set_as_leader(&mut self) {
+        if let SequencerKindConfig::Preferred(ref mut config) = &mut self.config.sequencer_config {
+            if let Some(c) = config.postgres_config.as_mut() {
+                c.node_role = ConfiguredNodeRole::Leader;
+            }
+        }
+    }
+
     /// See [`PreferredSequencerConfig::minimum_profit_per_tx`].
     pub fn with_preferred_seq_min_profit_per_tx(mut self, minimum_profit_per_tx: u128) -> Self {
         if let SequencerKindConfig::Preferred(ref mut config) = &mut self.config.sequencer_config {
@@ -160,23 +169,6 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
             self.config.sequencer_config =
                 SequencerKindConfig::Preferred(PreferredSequencerConfig {
                     minimum_profit_per_tx,
-                    ..PreferredSequencerConfig::default()
-                });
-        }
-        self
-    }
-
-    /// See [`PreferredSequencerConfig::timing_oracle`].
-    pub fn with_preferred_seq_oracle_config(
-        mut self,
-        timing_oracle_config: Option<TimingOracleConfig>,
-    ) -> Self {
-        if let SequencerKindConfig::Preferred(ref mut config) = &mut self.config.sequencer_config {
-            config.timing_oracle = timing_oracle_config;
-        } else {
-            self.config.sequencer_config =
-                SequencerKindConfig::Preferred(PreferredSequencerConfig {
-                    timing_oracle: timing_oracle_config,
                     ..PreferredSequencerConfig::default()
                 });
         }
@@ -298,7 +290,6 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
             }
         };
 
-        let (rest_addr_tx, rest_addr_rx) = tokio::sync::oneshot::channel();
         let shutdown_sender = rollup.shutdown_sender.clone();
 
         let mut other_handles = Vec::new();
@@ -308,8 +299,9 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
             other_handles.push(handle);
         }
 
+        let rest_addr = rollup.runner.axum_socket_address()?;
         let rollup_task = tokio::spawn(async move {
-            match rollup.run_and_report_addr(Some(rest_addr_tx)).await {
+            match rollup.run().await {
                 Ok(()) => {
                     tracing::info!("Completed running a rollup");
                     Ok(())
@@ -320,8 +312,6 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
                 }
             }
         });
-
-        let rest_addr = rest_addr_rx.await?;
 
         let rest_url = format!("http://{}:{}", rest_addr.ip(), rest_addr.port());
         let client = match NodeClient::new(&rest_url).await {
@@ -350,17 +340,13 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
     }
 
     pub fn rollup_config(&self) -> RollupConfig<<R::Spec as Spec>::Address, R::DaService> {
-        let mut rollup_db_config =
+        let rollup_db_config =
             RollupDbConfig::default_in_path(self.config.storage.path().to_path_buf());
-        if self.config.separate_archival_db {
-            rollup_db_config.separate_archival_state = true;
-        }
 
         RollupConfig {
             storage: rollup_db_config,
             runner: RunnerConfig {
                 da_polling_interval_ms: TEST_MOCK_DA_POLLING_INTERVAL.as_millis() as u64,
-                da_total_timeout_secs: 3_600,
                 http_config: HttpServerConfig::on_host_port(
                     &self.config.axum_host,
                     self.config.axum_port,
@@ -406,7 +392,6 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
     fn default_config(
         finalization_blocks: u32,
         storage_path: StoragePath,
-        is_replica: bool,
         postgres_config: Option<PostgresConfig>,
     ) -> RollupBuilderConfig<R::Spec> {
         RollupBuilderConfig {
@@ -417,7 +402,6 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
             max_infos_in_db: 250 + finalization_blocks as u64,
             automatic_batch_production: true,
             sequencer_config: SequencerKindConfig::Preferred(PreferredSequencerConfig {
-                is_replica: Some(is_replica),
                 postgres_config,
                 ..PreferredSequencerConfig::default()
             }),
@@ -436,7 +420,6 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
                 max_log_limit: 20000,
                 response_size_limit: (1024 * 1024) - (1024 * 30), // Limit our response size to 1MB, leaving 30kb for headers, overhead, and misestimation.
             }),
-            separate_archival_db: true,
         }
     }
 }
@@ -455,6 +438,11 @@ impl PostgresData {
             postgres: pg,
         }))
     }
+
+    /// Returns the PostgreSQL connection string.
+    pub fn connection_string(&self) -> &str {
+        &self.connection_string
+    }
 }
 
 impl<R> RollupBuilder<R>
@@ -462,26 +450,27 @@ where
     R: FullNodeBlueprint<Native, DaService = StorableMockDaClient> + Default + 'static,
 {
     pub async fn new_with_external_da(
-        is_replica: bool,
         genesis: GenesisSource<R::Spec, R::Runtime>,
         da_config: MockDaClientConfig,
-        postgres: Option<(Arc<PostgresData>, String)>,
+        postgres: Option<(Arc<PostgresData>, String, ConfiguredNodeRole)>,
     ) -> Self {
         let storage_path = StoragePath::Tmp(Arc::new(tempfile::tempdir().unwrap()));
 
         let postgres_container_opt: Option<Arc<PostgresData>> = postgres
             .as_ref()
-            .map(|(postgres_container, _)| postgres_container.clone());
+            .map(|(postgres_container, _, _)| postgres_container.clone());
 
         let post_config = postgres.as_ref().map(|p| PostgresConfig {
             postgres_connection_string: p.0.connection_string.clone(),
             node_id: p.1.clone(),
+            node_role: p.2,
+            leader_election: Default::default(),
         });
 
         Self {
             genesis,
             da_config,
-            config: Self::default_config(0, storage_path, is_replica, post_config),
+            config: Self::default_config(0, storage_path, post_config),
             postgres_container_opt,
             with_secondary_sequencer: None,
             exec_config: None,
@@ -555,13 +544,14 @@ where
             block_producing,
             da_layer: None,
             randomization: None,
+            failure_behavior: Default::default(),
         };
 
         Self {
             genesis,
             da_config,
             postgres_container_opt: None,
-            config: Self::default_config(finalization_blocks, storage_path, false, None),
+            config: Self::default_config(finalization_blocks, storage_path, None),
             with_secondary_sequencer: None,
             exec_config,
         }
@@ -729,7 +719,7 @@ where
     R: FullNodeBlueprint<Native> + Default + 'static,
 {
     /// Default timeout for polling operations in seconds.
-    pub const POLLING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+    pub const POLLING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
     /// Helper to get api_client
     pub fn api_client(&self) -> &sov_api_spec::client::Client {
@@ -763,6 +753,60 @@ where
             .expect("Failed to join rollup task before timeout.")
             .expect_err("Rollup task should have crashed");
         Ok(())
+    }
+
+    /// Waits for the rollup to crash and verifies the panic message contains the expected substring.
+    ///
+    /// This provides stronger guarantee that the crash was due to the expected condition, not some
+    /// unrelated bug. Useful in crash resilience tests where we intentionally trigger panics.
+    ///
+    /// # Arguments
+    /// * `t` - Timeout duration
+    /// * `expected_panic_substring` - String that must appear in the panic message
+    ///   (e.g., `CrashLocation` variant name)
+    ///
+    /// # Errors
+    /// - If the task doesn't crash within the timeout
+    /// - If the task completes successfully instead of panicking
+    /// - If the panic message doesn't contain the expected substring
+    pub async fn wait_for_rollup_to_crash_with_expected_panic(
+        self,
+        t: Duration,
+        expected_panic_substring: &str,
+    ) -> anyhow::Result<()> {
+        let result = timeout(t, self.rollup_task)
+            .await
+            .expect("Failed to join rollup task before timeout.");
+
+        match result {
+            Err(join_error) if join_error.is_panic() => {
+                let panic_payload = join_error.into_panic();
+                let panic_message = if let Some(msg) = panic_payload.downcast_ref::<&str>() {
+                    (*msg).to_string()
+                } else if let Some(msg) = panic_payload.downcast_ref::<String>() {
+                    msg.clone()
+                } else {
+                    anyhow::bail!("Panic payload is not a string type");
+                };
+
+                anyhow::ensure!(
+                    panic_message.contains(expected_panic_substring),
+                    "Panic message doesn't match expected crash.\n\
+                     Expected to contain: {expected_panic_substring}\n\
+                     Actual panic message: {panic_message}",
+                );
+                Ok(())
+            }
+            Err(join_error) => {
+                anyhow::bail!("Task did not panic, but failed with: {join_error}");
+            }
+            Ok(Ok(())) => {
+                anyhow::bail!("Task completed successfully, expected crash");
+            }
+            Ok(Err(e)) => {
+                anyhow::bail!("Task returned error instead of panicking: {e}");
+            }
+        }
     }
 
     /// Shuts down the rollup and waits for all background tasks to finish.
@@ -804,6 +848,16 @@ where
             .await
     }
 
+    /// Subscribe to forced batch notifications.
+    pub async fn subscribe_forced_tx_batches(&self) -> WsSubscription<ForcedTxBatchNotification> {
+        self.client
+            .client
+            .subscribe_to_ws::<ForcedTxBatchNotification>(
+                "/sequencer/test-utils/forced-tx-batch-notifier/ws",
+            )
+            .await
+    }
+
     /// Subscribe to blobs from the blob sender.
     pub async fn subscribe_to_blobs_from_blob_sender(
         &self,
@@ -823,6 +877,11 @@ where
                 false
             }
         }
+    }
+
+    /// Returns the current sequencer role.
+    pub async fn sequencer_role(&self) -> anyhow::Result<SequencerRole> {
+        self.client.query_rest_endpoint("/sequencer/role").await
     }
 
     /// Polls the sequencer until is_ready() returns Err(). Useful when you expect the sequencer to

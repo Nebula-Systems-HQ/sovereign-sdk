@@ -1,15 +1,16 @@
-use crate::preferred::db::SequencerRole;
-
 use super::*;
+use crate::preferred::db::heartbeat_task::HeartBeatTask;
+use crate::preferred::db::SequencerRole;
 use anyhow::Context;
 use anyhow::Result;
 use sov_db::ledger_db::LedgerDb;
 use sov_modules_api::rest::StateUpdateReceiver;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::debug;
 
@@ -52,6 +53,7 @@ where
         api_ledger_db: LedgerDb,
         shutdown_sender: watch::Sender<()>,
         stop_at_rollup_height: Option<RollupHeight>,
+        bind_addr: SocketAddr,
     ) -> Result<(PreferredSequencer<S, Rt, Da>, Vec<JoinHandle<()>>)> {
         let shutdown_receiver = shutdown_sender.subscribe();
         let latest_state_update = state_update_receiver.borrow().clone();
@@ -68,13 +70,8 @@ where
             "Instantiating the preferred sequencer"
         );
 
-        let mut config = self.config;
+        let config = self.config;
         let preferred_config = &config.sequencer_kind_config;
-
-        let maybe_oracle_config =
-            TimingOracleConfigWithPrivateKey::new(preferred_config.timing_oracle.clone())
-                .transpose()?;
-        maybe_add_oracle_to_admins(&mut config.admin_addresses, &maybe_oracle_config);
 
         let tx_status_manager = TxStatusManager::default();
 
@@ -84,9 +81,9 @@ where
 
         let (db, seq_role) = PreferredSequencerDb::new(
             shutdown_sender.clone(),
-            preferred_config.is_replica,
             storage_path,
             &preferred_config.postgres_config,
+            bind_addr,
         )
         .await?;
 
@@ -128,12 +125,14 @@ where
 
         let in_flight_blobs = blob_sender.nb_of_in_flight_blobs();
 
+        let (forced_tx_batch_notifier, _) = broadcast::channel(1);
         let rollup_exec_config = RollupBlockExecutorConfig {
             da_address,
             shutdown_notifier: block_executors_shutdown_notifier.clone(),
             state_root_request_sender: state_root_task.request_sender.clone(),
             shutdown_receiver: shutdown_receiver.clone(),
             shutdown_sender: shutdown_sender.clone(),
+            forced_tx_batch_notifier: forced_tx_batch_notifier.clone(),
         };
 
         let (cache_warm_up_executor, workers) = CacheWarmUpExecutor::spawn_execution_task::<Rt>(
@@ -156,7 +155,6 @@ where
             preferred_config.batch_execution_time_limit_millis * 1000;
         let (synchronized_state, synchronized_state_updator) = create(
             seq_role,
-            api_ledger_db.clone(),
             latest_state_update.clone(),
             tx_queue_id.clone(),
             batch_execution_time_limit_micros,
@@ -184,6 +182,7 @@ where
             blob_sender,
             executor_events_receiver,
             db,
+            api_ledger_db,
             shutdown_sender: shutdown_sender.clone(),
             transaction_cache: cached_txs.write_handle(),
         }
@@ -200,11 +199,13 @@ where
             execution_backend,
             preferred_config.maximum_future_nonce_delta,
             preferred_config.future_nonce_transaction_timeout_millis,
+            forced_tx_batch_notifier.subscribe(),
             shutdown_receiver.clone(),
         );
         handles.push(nonce_buffer_task);
 
         let seq = PreferredSequencer(Arc::new(PreferredSequencerFields {
+            seq_role,
             synchronized_state_updator: synchronized_state_updator.clone(),
             tx_status_manager: tx_status_manager.clone(),
             transaction_cache: cached_txs,
@@ -218,12 +219,12 @@ where
             tx_queue_id,
             stop_at_rollup_height,
             test_only_state_update_notification_receiver,
+            test_only_forced_tx_batch_notification_receiver: forced_tx_batch_notifier.subscribe(),
             runtime: Rt::default(),
         }));
 
         // Launch replica sync task only for replicas.
-
-        if let SequencerRole::Replica = seq_role {
+        if let SequencerRole::PgSyncReplica = seq_role {
             if let Some(postgres_config) = &preferred_config.postgres_config {
                 let replica_task_handle = replica_task
                     .start(synchronized_state_updator, postgres_config)
@@ -231,6 +232,19 @@ where
                 handles.push(replica_task_handle.data_fetcher_handle);
                 handles.push(replica_task_handle.sync_task_handle);
             }
+        }
+
+        // Launch heartbeat tasks for leadership election and node registration
+        if let Some(postgres_config) = &preferred_config.postgres_config {
+            let heartbeat_task = HeartBeatTask::new(
+                postgres_config.clone(),
+                shutdown_sender.clone(),
+                bind_addr,
+                postgres_config.leader_election.heartbeat_interval(),
+            )
+            .await?;
+            let heartbeat_handle = heartbeat_task.spawn(seq_role).await;
+            handles.push(heartbeat_handle);
         }
 
         handles.push(tokio::spawn(update_state_task(
@@ -254,19 +268,6 @@ where
             }
         }));
 
-        if let Some(oracle_config) = maybe_oracle_config {
-            if let SequencerRole::Leader = seq_role {
-                if Rt::default().maybe_set_oracle_timestamp(0).is_some() {
-                    match update_timestamp_task(seq.clone(), oracle_config, shutdown_receiver) {
-                        Ok(handle) => handles.push(handle),
-                        Err(e) => {
-                            error!(error = ?e, "Failed to start timestamp oracle task");
-                        }
-                    }
-                }
-            }
-        }
-
         Ok((seq, handles))
     }
 
@@ -282,6 +283,8 @@ where
                 "Attempting to use preferred sequencer with an incompatible rollup. Set your sequencer config to `standard` in your rollup's config.toml file or change your kernel to be compatible with soft confirmations."
             );
         let checkpoint = StateCheckpoint::new(storage, &runtime.kernel(), None);
+        // Preferred sequencer deliberately treats the latest available slot as finalized
+        // when initializing API state (soft-confirmation semantics).
         let concurrent_checkpoint = ConcurrentStateCheckpoint::from_state_checkpoint(checkpoint);
         let (checkpoint_sender, checkpoint_receiver) =
             watch::channel(Arc::new(concurrent_checkpoint));
@@ -293,20 +296,4 @@ where
         );
         (api_state, checkpoint_sender)
     }
-}
-
-fn maybe_add_oracle_to_admins<S: Spec>(
-    admins: &mut Vec<S::Address>,
-    oracle_config: &Option<TimingOracleConfigWithPrivateKey<S>>,
-) {
-    if let Some(oracle_config) = oracle_config {
-        let oracle = oracle_config.address();
-        if !admins.contains(&oracle) {
-            info!(
-                "Adding oracle address {} to sequencer's admin address list",
-                oracle
-            );
-            admins.push(oracle);
-        }
-    };
 }

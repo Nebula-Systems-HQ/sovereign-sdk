@@ -15,6 +15,7 @@ mod metrics;
 mod sov_evm;
 mod state_access;
 use sov_rollup_interface::da::Time;
+use sov_state::{Kernel, User};
 use std::ops::RangeInclusive;
 
 pub use call::*;
@@ -48,7 +49,7 @@ use sov_bank::Amount;
 use sov_modules_api::{
     err_detail, AccessoryStateMap, AccessoryStateValue, Context, CoreModuleError, DaSpec,
     ErrorContext, ErrorDetail, GenesisState, Module, ModuleId, ModuleInfo, Spec, StateMap,
-    StateValue, StateVec, TxState,
+    StateReader, StateValue, StateVec, TxState, VersionReader,
 };
 use sov_state::codec::BcsCodec;
 
@@ -57,7 +58,7 @@ use crate::db::DbAccount;
 pub use crate::evm::primitive_types::TransactionSigned;
 use crate::evm::primitive_types::{Block, PendingTransaction, TxSignedAndRecovered};
 
-pub use crate::evm::primitive_types::{Receipt, SealedBlock};
+pub use crate::evm::primitive_types::{Receipt, SealedBlock, SyntheticBlockWithoutRootsAndBloom};
 
 pub use conversions::convert_to_tx_signed;
 pub use conversions::create_tx_env;
@@ -79,6 +80,10 @@ pub struct Evm<S: Spec> {
     /// Mapping from account address to account state.
     #[state]
     pub(crate) accounts: StateMap<Address, DbAccount, BcsCodec>,
+
+    /// The address allowed to make changes to the `cfg`.
+    #[state]
+    pub(crate) admin: StateValue<S::Address, BcsCodec>,
 
     /// Storage for accounts.
     #[state]
@@ -161,6 +166,15 @@ pub struct Evm<S: Spec> {
 
     #[phantom]
     phantom: core::marker::PhantomData<S>,
+
+    /// When true, the max fee check in the authenticator is disabled.
+    /// This is set to true when an EvmRuntimeConfigUpdate with all fields None is received.
+    #[state]
+    pub(crate) disable_max_fee_check: StateValue<bool, BcsCodec>,
+
+    /// Used only by the RPC: actual gas-token fee paid per tx index.
+    #[state]
+    pub receipt_fees: AccessoryStateMap<u64, Amount, BcsCodec>,
 }
 
 /// The top-level error type for all EVM module operations.
@@ -192,9 +206,9 @@ where
 {
     type Spec = S;
 
-    type Config = EvmGenesisConfig;
+    type Config = EvmGenesisConfig<S>;
 
-    type CallMessage = CallMessage;
+    type CallMessage = CallMessage<S>;
 
     type Event = ();
 
@@ -215,13 +229,34 @@ where
         context: &Context<Self::Spec>,
         state: &mut impl TxState<S>,
     ) -> Result<(), Error> {
-        Ok(self.execute_call(msg, context, state)?)
+        match msg {
+            CallMessage::Call(tx) => Ok(self.execute_call(tx, context, state)?),
+            CallMessage::UpdateRuntimeConfig(update) => {
+                Ok(self.update_runtime_config(update, context, state)?)
+            }
+        }
     }
 }
 
 impl<S: Spec> Evm<S> {
-    pub(crate) fn base_fee(&self) -> u64 {
-        0
+    pub(crate) fn base_fee<Reader, E>(&self, state: &mut Reader) -> Result<u64, E>
+    where
+        Reader: VersionReader + StateReader<User, Error = E> + StateReader<Kernel, Error = E>,
+    {
+        let price = self
+            .chain_state_module
+            .base_fee_per_gas(state)?
+            .expect("Base fee per gas must be set");
+        Ok(price.as_ref()[0].0.try_into().unwrap_or(u64::MAX))
+    }
+
+    /// Get the admin address.
+    pub fn admin<Reader, E>(&self, state: &mut Reader) -> Result<S::Address, E>
+    where
+        Reader: StateReader<User, Error = E>,
+    {
+        let admin = self.admin.get(state)?;
+        Ok(admin.expect("Admin must be set at genesis and cannot be removed"))
     }
 }
 

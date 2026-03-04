@@ -17,6 +17,8 @@ const PAGE_SIZE: usize = 2000;
 pub(crate) enum DBDataRejected {
     ExecutorBehind(DbData),
     ExecutorAhead(u64),
+    /// The replica reached the configured stop height for a rollup upgrade.
+    StopHeightReached,
 }
 
 #[async_trait]
@@ -137,6 +139,41 @@ impl ReplicaSyncTask {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                         continue 'inner;
                     }
+
+                    Err(DBDataRejected::StopHeightReached) => {
+                        // Stop height reached: drain events until shutdown.
+                        //
+                        // We've reached the configured stop height for this rollup upgrade.
+                        // Rather than exiting (which the task monitor would treat as a bug),
+                        // we drain events from the channel until shutdown. This keeps the
+                        // task alive and prevents buffer filling while the runner completes
+                        // processing DA blocks and triggers graceful shutdown.
+                        //
+                        // INVARIANT: This assumes that once the stop height is reached, we are
+                        // guaranteed to shut down soon. If we ever add an API to live-edit the
+                        // stop height, this will need to be taken into account for replicas.
+                        tracing::info!("Replica reached stop height, stopping event processing. Draining db events until node shutdown.");
+                        loop {
+                            let fut =
+                                future_or_shutdown(db_data_receiver.recv(), &shutdown_receiver);
+                            match fut.await {
+                                FutureOrShutdownOutput::Shutdown
+                                | FutureOrShutdownOutput::Output(None) => {
+                                    break 'outer;
+                                }
+                                FutureOrShutdownOutput::Output(Some(_)) => {
+                                    // Discard - past stop height.
+                                    // As mentioned above, this assumes that we will always shut
+                                    // down after reaching the stop height. The node will process
+                                    // the on-disk state up to the stop height and shut down
+                                    // immediately, so these events only affect the in-memory state
+                                    // of the sequencer. Therefore they are useless to this version
+                                    // of the rollup, and the next version will catch up on startup
+                                    // using the normal mechanisms.
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -149,11 +186,14 @@ mod tests {
     use crate::preferred::db::postgres::PostgresBackend;
     use crate::preferred::db::BatchToStore;
     use crate::preferred::db::DbBackend;
+    use sov_full_node_configs::sequencer::ConfiguredNodeRole;
     use sov_modules_api::FullyBakedTx;
     use sov_modules_api::TxHash;
     use sov_modules_api::VisibleSlotNumber;
     use sov_test_utils::postgres::config_from_postgres_container;
     use sov_test_utils::postgres::{create_postgres_container, CreatePostgresError};
+    use std::net::Ipv4Addr;
+    use std::net::SocketAddr;
     use std::sync::atomic::Ordering;
     use tokio::sync::mpsc::error::TryRecvError;
 
@@ -346,15 +386,27 @@ mod tests {
             }
         };
 
-        let postgres_config = config_from_postgres_container(&postgres, "Replica".into())
+        let postgres_config = config_from_postgres_container(
+            &postgres,
+            "Replica".into(),
+            ConfiguredNodeRole::Replica,
+        )
+        .await
+        .unwrap();
+
+        let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
+        let db = PostgresBackend::connect(&postgres_config, addr)
             .await
             .unwrap();
 
-        let db = PostgresBackend::connect(&postgres_config).await.unwrap();
+        let _ = db
+            .heartbeat(Some(postgres_config.leader_election))
+            .await
+            .unwrap();
 
         let (shutdown_snd, _shutdown_rcv) = watch::channel(());
         let (mut sync_task, start_replica_task_notifier) =
-            ReplicaSyncTask::new_with_page_size(shutdown_snd, 8, SequencerRole::Replica)
+            ReplicaSyncTask::new_with_page_size(shutdown_snd, 8, SequencerRole::PgSyncReplica)
                 .await
                 .unwrap();
 

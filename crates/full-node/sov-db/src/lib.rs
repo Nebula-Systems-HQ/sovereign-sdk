@@ -34,8 +34,6 @@ pub mod accessory_db;
 /// Define namespaces at the database level
 pub mod namespaces;
 
-/// Implements commit flag logic for state_db_nomt.
-pub(crate) mod commit_flag;
 /// Configuration for `sov-db`
 pub mod config;
 pub(crate) mod metrics;

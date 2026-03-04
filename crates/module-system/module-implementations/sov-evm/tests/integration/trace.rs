@@ -10,7 +10,7 @@ use sov_test_utils::BatchTestCase;
 
 #[test]
 fn test_tracing() {
-    let (mut runner, account, _) = setup();
+    let (mut runner, account, _, _) = setup();
     let contract = LegacySimpleStorage::default();
     let contract_addr = account.address().create(0);
 
@@ -55,7 +55,7 @@ fn test_tracing() {
                 input: "371303c0".parse::<Bytes>().unwrap(),
                 value: Some(U256::ZERO),
                 gas: U256::from(1_000_000),
-                gas_used: U256::from(5_612),
+                gas_used: U256::from(5_656),
                 output: "0000000000000000000000000000000000000000000000000000000000000002"
                     .parse::<Bytes>()
                     .ok(),

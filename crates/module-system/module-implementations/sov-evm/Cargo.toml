@@ -63,6 +63,7 @@ revm = { workspace = true, features = [
 	"optional_eip3607",
 	"optional_no_base_fee",
 	"optional_balance_check",
+	"memory_limit",
 	"std",
 ] }
 revm-database-interface = { workspace = true }
@@ -135,6 +136,7 @@ native = [
 	"dep:sov-rpc-eth-types",
 	# Optional for speed up in native mode
 	# "revm/asm-keccak"
+	"revm/blst", # Use faster C implementation of bls in native code
 	"sov-evm/native",
 	"sov-metrics/native",
 	"sov-address/native",

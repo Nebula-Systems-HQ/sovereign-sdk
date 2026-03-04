@@ -1,10 +1,14 @@
+use std::str::FromStr;
+
 use alloy_consensus::constants::KECCAK_EMPTY;
 use alloy_consensus::{BlockHeader, Header};
 use alloy_primitives::{Address, Bytes, U256};
 use revm::state::AccountInfo;
 use revm::Database;
+use sov_address::{EthereumAddress, FromVmAddress, MultiAddress};
 use sov_evm::{
-    AccountData, ContractCreationPolicy, Evm, EvmGenesisConfig, EvmRuntimeConfig, SpecId,
+    AccountData, ContractCreationPolicy, Evm, EvmChainSpec, EvmGenesisConfig, EvmRuntimeConfig,
+    SpecId,
 };
 use sov_modules_api::prelude::UnwrapInfallible;
 use sov_modules_api::ETHEREUM_BLOCK_GAS_LIMIT;
@@ -47,11 +51,11 @@ fn test_genesis_cfg() {
         assert_eq!(
             evm.cfg_infallible(state),
             EvmRuntimeConfig {
-                chain_spec: sov_evm::EvmChainSpec {
-                    block_gas_limit: ETHEREUM_BLOCK_GAS_LIMIT,
+                chain_spec: EvmChainSpec {
                     coinbase: Address::from([3u8; 20]),
                     limit_contract_code_size: Some(5000),
                     hardforks: vec![(0, SpecId::BERLIN), (1, SpecId::CANCUN)],
+                    ..Default::default()
                 },
                 hardforks: vec![(0, SpecId::BERLIN), (1, SpecId::CANCUN)],
                 contract_creation_policy: ContractCreationPolicy::Everyone
@@ -76,14 +80,14 @@ fn test_empty_spec_defaults_to_cancun() {
 #[test]
 #[should_panic(expected = "EVM spec must start from block 0")]
 fn test_cfg_missing_specs() {
-    let mut cfg = EvmGenesisConfig::default();
+    let mut cfg = default_config();
     cfg.chain_spec.hardforks = vec![(5, SpecId::BERLIN)];
     let _ = basic_setup(cfg);
 }
 
 #[test]
 fn test_genesis_block() {
-    let (runner, _, _) = setup();
+    let (runner, _, _, _) = setup();
     let beneficiary = Address::new([0u8; 20]);
 
     runner.query_visible_state(move |state| {
@@ -107,7 +111,7 @@ fn test_genesis_block() {
     });
 }
 
-fn default_config() -> EvmGenesisConfig {
+fn default_config() -> EvmGenesisConfig<S> {
     EvmGenesisConfig {
         accounts: vec![AccountData {
             address: Address::from([1u8; 20]),
@@ -116,17 +120,20 @@ fn default_config() -> EvmGenesisConfig {
         }],
         initial_base_fee: 70,
         genesis_timestamp: 50,
-        chain_spec: sov_evm::EvmChainSpec {
-            block_gas_limit: ETHEREUM_BLOCK_GAS_LIMIT,
+        chain_spec: EvmChainSpec {
             coinbase: Address::from([3u8; 20]),
             limit_contract_code_size: Some(5000),
             hardforks: vec![(0, SpecId::BERLIN), (1, SpecId::CANCUN)],
+            ..Default::default()
         },
         contract_creation_policy: ContractCreationPolicy::Everyone,
+        admin: MultiAddress::from_vm_address(
+            EthereumAddress::from_str("0x0123456789012345678901234567890123456789").unwrap(),
+        ),
     }
 }
 
-fn basic_setup(cfg: EvmGenesisConfig) -> TestRunner<RT, S> {
+fn basic_setup(cfg: EvmGenesisConfig<S>) -> TestRunner<RT, S> {
     let genesis_config = HighLevelOptimisticGenesisConfig::generate();
     let genesis = GenesisConfig::from_minimal_config(genesis_config.into(), cfg);
 
