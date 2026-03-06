@@ -15,7 +15,7 @@ use crate::state::traits::delegate_version_reader;
 use crate::state::traits::PerBlockCache;
 use crate::{
     AccessoryStateWriter, Amount, BasicGasMeter, Gas, GasArray, GasBiller, GasBillingError,
-    GasMeter, GasMeteringError, ProvableStateReader, ProvableStateWriter, StateAccessor, TxState,
+    GasMeter, GasMeteringError, ProvableStateReader, ProvableStateWriter, TxState,
 };
 
 #[cfg(feature = "test-utils")]
