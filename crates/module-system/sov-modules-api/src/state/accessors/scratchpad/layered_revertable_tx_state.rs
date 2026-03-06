@@ -384,6 +384,10 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         }
 
         let layer = self.layers.pop().unwrap();
+        debug_assert!(
+            layer.gas_payer.is_none(),
+            "Use commit_layer() for layers with gas payers"
+        );
         self.commit_layer_internal(layer);
     }
 
@@ -398,6 +402,11 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             panic!("Cannot revert layer: no layers exist");
         }
 
+        let layer = self.layers.last().unwrap();
+        debug_assert!(
+            layer.gas_payer.is_none(),
+            "Use revert_layer() for layers with gas payers"
+        );
         self.layers.pop();
     }
 
@@ -478,6 +487,11 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
 
             // Merge cache
             lower_layer.temp_cache.update_with(layer.temp_cache);
+
+            // Merge gas consumed so gas payer layers bill for all nested gas
+            if let Some(combined) = lower_layer.gas_consumed.checked_combine(layer.gas_consumed) {
+                lower_layer.gas_consumed = combined;
+            }
         }
     }
 
