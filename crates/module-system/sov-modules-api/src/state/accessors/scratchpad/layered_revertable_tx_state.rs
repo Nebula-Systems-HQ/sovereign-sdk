@@ -321,11 +321,13 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
 
     /// Extract billing info from the top layer (before it's consumed).
     /// Returns `None` if there's no layer or the layer has no gas payer.
-    fn extract_gas_billing_info(&self) -> Option<GasBillingInfo<S>> {
-        let layer = self.layers.last()?;
+    /// Takes ownership of gas_payer and gas_snapshot so the layer is clean
+    /// before delegation to commit/revert_layer_without_billing.
+    fn extract_gas_billing_info(&mut self) -> Option<GasBillingInfo<S>> {
+        let layer = self.layers.last_mut()?;
         Some(GasBillingInfo {
-            gas_payer: layer.gas_payer.clone()?,
-            gas_snapshot: layer.gas_snapshot.clone()?,
+            gas_payer: layer.gas_payer.take()?,
+            gas_snapshot: layer.gas_snapshot.take()?,
             gas_consumed: layer.gas_consumed,
         })
     }
