@@ -13,6 +13,7 @@ use super::super::{BorshSerializedSize, StateMetricsProvider, UniversalStateAcce
 use crate::module::Spec;
 use crate::state::traits::delegate_version_reader;
 use crate::state::traits::PerBlockCache;
+use crate::transaction::PriorityFeeBips;
 use crate::{
     AccessoryStateWriter, Amount, BasicGasMeter, Gas, GasArray, GasBiller, GasBillingError,
     GasMeter, GasMeteringError, ProvableStateReader, ProvableStateWriter, TxState,
@@ -46,6 +47,7 @@ struct GasBillingInfo<S: Spec> {
     gas_payer: S::Address,
     gas_snapshot: GasSnapshot<S>,
     gas_consumed: S::Gas,
+    priority_fee_bips: PriorityFeeBips,
 }
 
 /// Error type for gas payer layer operations.
@@ -133,6 +135,8 @@ pub(super) struct StateLayer<S: Spec> {
     /// Gas snapshot taken at layer creation time.
     /// Contains the outer payer's meter state (for restoration) and gas payer's balance.
     pub(super) gas_snapshot: Option<GasSnapshot<S>>,
+    /// Priority fee charged in addition to the base gas cost when this layer settles.
+    pub(super) priority_fee_bips: PriorityFeeBips,
 }
 
 impl<S: Spec> StateLayer<S> {
@@ -144,10 +148,15 @@ impl<S: Spec> StateLayer<S> {
             gas_payer: None,
             gas_consumed: S::Gas::ZEROED,
             gas_snapshot: None,
+            priority_fee_bips: PriorityFeeBips::ZERO,
         }
     }
 
-    fn new_with_gas_payer(gas_payer: S::Address, gas_snapshot: GasSnapshot<S>) -> Self {
+    fn new_with_gas_payer(
+        gas_payer: S::Address,
+        gas_snapshot: GasSnapshot<S>,
+        priority_fee_bips: PriorityFeeBips,
+    ) -> Self {
         Self {
             events: Vec::new(),
             temp_cache: TempCache::new(),
@@ -155,6 +164,7 @@ impl<S: Spec> StateLayer<S> {
             gas_payer: Some(gas_payer),
             gas_consumed: S::Gas::ZEROED,
             gas_snapshot: Some(gas_snapshot),
+            priority_fee_bips,
         }
     }
 }
@@ -212,6 +222,11 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         self.last_gas_consumed
     }
 
+    /// Clears the last recorded gas consumption for the most recent gas-payer layer settlement.
+    pub fn clear_last_gas_consumed(&mut self) {
+        self.last_gas_consumed = None;
+    }
+
     /// Adds a new revertable layer on top of the current layers.
     /// This pushes a new layer onto the layers stack.
     pub fn add_revertable_layer(&mut self) -> &mut Self {
@@ -248,10 +263,33 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         gas_limit: S::Gas,
         biller: &B,
     ) -> Result<&mut Self, GasPayerError<S::Gas>> {
-        let gas_snapshot =
-            self.validate_and_swap_gas_payer(gas_payer.clone(), gas_limit, biller)?;
-        self.layers
-            .push(StateLayer::new_with_gas_payer(gas_payer, gas_snapshot));
+        self.add_revertable_layer_with_gas_payer_and_priority_fee(
+            gas_payer,
+            gas_limit,
+            PriorityFeeBips::ZERO,
+            biller,
+        )
+    }
+
+    /// Adds a new revertable layer with a different gas payer and an optional priority fee.
+    pub fn add_revertable_layer_with_gas_payer_and_priority_fee<B: GasBiller<S>>(
+        &mut self,
+        gas_payer: S::Address,
+        gas_limit: S::Gas,
+        priority_fee_bips: PriorityFeeBips,
+        biller: &B,
+    ) -> Result<&mut Self, GasPayerError<S::Gas>> {
+        let gas_snapshot = self.validate_and_swap_gas_payer(
+            gas_payer.clone(),
+            gas_limit,
+            priority_fee_bips,
+            biller,
+        )?;
+        self.layers.push(StateLayer::new_with_gas_payer(
+            gas_payer,
+            gas_snapshot,
+            priority_fee_bips,
+        ));
         Ok(self)
     }
 
@@ -268,10 +306,11 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         &mut self,
         gas_payer: S::Address,
         gas_limit: S::Gas,
+        priority_fee_bips: PriorityFeeBips,
         biller: &B,
     ) -> Result<GasSnapshot<S>, GasPayerError<S::Gas>> {
         // Phase 1: Read meter values (borrow meter, extract values, drop borrow)
-        let (remaining_gas, remaining_funds, gas_cost) = {
+        let (remaining_gas, remaining_funds, total_max_cost) = {
             let meter = match self.inner.try_as_basic_gas_meter() {
                 Some(m) => m,
                 None => {
@@ -292,11 +331,21 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             }
 
             let gas_cost = gas_limit.value(meter.gas_price);
+            let priority_fee = priority_fee_bips.apply(gas_cost).map_err(|_| {
+                GasPayerError::BillingError(GasBillingError::TransferError(
+                    "Priority fee overflow during gas payer setup".to_string(),
+                ))
+            })?;
+            let total_max_cost = gas_cost.checked_add(priority_fee).ok_or_else(|| {
+                GasPayerError::BillingError(GasBillingError::TransferError(
+                    "Total gas cost overflow during gas payer setup".to_string(),
+                ))
+            })?;
             let remaining_funds = meter
                 .remaining_funds
                 .ok_or(GasPayerError::FundsTrackingNotEnabled)?;
 
-            (meter.remaining_gas, remaining_funds, gas_cost)
+            (meter.remaining_gas, remaining_funds, total_max_cost)
         }; // meter borrow dropped
 
         // Phase 2: Read gas payer's balance (borrow self.inner as StateAccessor)
@@ -307,9 +356,9 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             })?;
 
         // Validate gas payer can afford the gas limit
-        if payer_balance < gas_cost {
+        if payer_balance < total_max_cost {
             return Err(GasPayerError::InsufficientPayerBalance {
-                required: gas_cost,
+                required: total_max_cost,
                 available: payer_balance,
             });
         }
@@ -321,9 +370,8 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         };
 
         if let Some(meter) = self.inner.try_as_basic_gas_meter() {
-            // Perform the meter swap: set remaining_funds to the gas limit cost
-            // This caps how much gas the layer can consume (User B pays up to gas_limit)
-            meter.remaining_funds = Some(gas_cost);
+            // Gas units remain capped by `gas_limit`; funds reserve covers base gas plus priority tip.
+            meter.remaining_funds = Some(total_max_cost);
         }
 
         Ok(snapshot)
@@ -339,6 +387,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             gas_payer: layer.gas_payer.take()?,
             gas_snapshot: layer.gas_snapshot.take()?,
             gas_consumed: layer.gas_consumed,
+            priority_fee_bips: layer.priority_fee_bips,
         })
     }
 
@@ -367,9 +416,16 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             }
         }; // meter borrow dropped
 
+        let priority_fee = info.priority_fee_bips.apply(gas_cost).map_err(|_| {
+            GasBillingError::TransferError("Priority fee overflow during gas billing".to_string())
+        })?;
+        let total_cost = gas_cost.checked_add(priority_fee).ok_or_else(|| {
+            GasBillingError::TransferError("Total gas cost overflow during gas billing".to_string())
+        })?;
+
         // Phase 2: Transfer tokens (borrow self.inner as StateAccessor)
-        if gas_cost > Amount::ZERO {
-            biller.transfer_gas_tokens(&info.gas_payer, sequencer, gas_cost, self.inner)?;
+        if total_cost > Amount::ZERO {
+            biller.transfer_gas_tokens(&info.gas_payer, sequencer, total_cost, self.inner)?;
         }
 
         // Record actual gas consumed so callers can read it
@@ -737,6 +793,7 @@ mod tests {
     use crate::capabilities::mocks::MockKernel;
     use crate::execution_mode::Native;
     use crate::state::accessors::scratchpad::WorkingSet;
+    use crate::StateAccessor;
     use sov_state::namespaces::User;
     use sov_state::{CompileTimeNamespace, SlotKey, SlotValue};
     use sov_test_utils::storage::SimpleStorageManager;

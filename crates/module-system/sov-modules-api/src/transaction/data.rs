@@ -3,6 +3,7 @@ use std::rc::Rc;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use derive_more::{From, Into};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{Amount, BasicGasMeter, Gas, GasArray, Spec};
@@ -16,6 +17,7 @@ use crate::{Amount, BasicGasMeter, Gas, GasArray, Spec};
 #[derive(
     From,
     Into,
+    Default,
     Serialize,
     Deserialize,
     BorshSerialize,
@@ -27,6 +29,7 @@ use crate::{Amount, BasicGasMeter, Gas, GasArray, Spec};
     Eq,
     PartialOrd,
     Ord,
+    JsonSchema,
     sov_rollup_interface::sov_universal_wallet::UniversalWallet,
 )]
 pub struct PriorityFeeBips(pub u64);
