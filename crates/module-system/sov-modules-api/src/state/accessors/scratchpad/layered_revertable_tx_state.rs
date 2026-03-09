@@ -176,6 +176,9 @@ pub struct LayeredRevertableTxState<'a, S: Spec, State> {
     pub(super) inner: &'a mut State,
     pub(super) layers: Vec<StateLayer<S>>,
     pub(super) phantom: PhantomData<S>,
+    /// Gas consumed by the most recent `try_with_gas_payer` call.
+    /// Overwritten each time a gas-payer-billed layer is settled.
+    last_gas_consumed: Option<S::Gas>,
 }
 
 impl<S: Spec, I: StateMetricsProvider> StateMetricsProvider for LayeredRevertableTxState<'_, S, I> {
@@ -199,7 +202,14 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             inner,
             layers: Vec::new(),
             phantom: PhantomData,
+            last_gas_consumed: None,
         }
+    }
+
+    /// Returns gas consumed by the most recent `try_with_gas_payer` call.
+    /// Overwritten each time a gas-payer-billed layer is settled (committed or reverted).
+    pub fn last_gas_consumed(&self) -> Option<S::Gas> {
+        self.last_gas_consumed
     }
 
     /// Adds a new revertable layer on top of the current layers.
@@ -362,9 +372,13 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             biller.transfer_gas_tokens(&info.gas_payer, sequencer, gas_cost, self.inner)?;
         }
 
+        // Record actual gas consumed so callers can read it
+        self.last_gas_consumed = Some(info.gas_consumed);
+
         // Phase 3: Restore outer payer's meter state (borrow meter again)
         if let Some(meter) = self.inner.try_as_basic_gas_meter() {
-            meter.remaining_gas = info.gas_snapshot
+            meter.remaining_gas = info
+                .gas_snapshot
                 .outer_remaining_gas
                 .checked_sub(info.gas_consumed)
                 .unwrap_or(S::Gas::ZEROED);
@@ -632,7 +646,11 @@ impl<S: Spec, I: TxState<S>> PerBlockCache for LayeredRevertableTxState<'_, S, I
 }
 
 impl<S: Spec, I: TxState<S>> EventContainer for LayeredRevertableTxState<'_, S, I> {
-    fn add_event<E: 'static + core::marker::Send + core::marker::Sync>(&mut self, event_key: &str, event: E) {
+    fn add_event<E: 'static + core::marker::Send + core::marker::Sync>(
+        &mut self,
+        event_key: &str,
+        event: E,
+    ) {
         if self.layers.is_empty() {
             // No layers, add event directly to inner state
             self.inner.add_event(event_key, event);
@@ -1514,11 +1532,7 @@ mod tests {
         let gas_limit = <TestSpec as Spec>::Gas::ZEROED;
         let biller = MockBiller::with_balance(Amount::MAX);
         layered_state
-            .add_revertable_layer_with_gas_payer(
-                gas_payer.clone(),
-                gas_limit,
-                &biller,
-            )
+            .add_revertable_layer_with_gas_payer(gas_payer.clone(), gas_limit, &biller)
             .unwrap();
 
         assert_eq!(layered_state.layer_depth(), 1);
@@ -1828,8 +1842,7 @@ mod tests {
             Err(GasPayerError::InsufficientGas {
                 required,
                 available,
-            }) => {
-            }
+            }) => {}
             Ok(_) => panic!("Expected InsufficientGas error, got Ok"),
             Err(other) => panic!("Expected InsufficientGas error, got: {:?}", other),
         }
@@ -1866,11 +1879,8 @@ mod tests {
         // Zero gas limit should be allowed (no-op layer)
         let zero_gas_limit = <TestSpec as Spec>::Gas::ZEROED;
 
-        let result = layered_state.add_revertable_layer_with_gas_payer(
-            gas_payer,
-            zero_gas_limit,
-            &biller,
-        );
+        let result =
+            layered_state.add_revertable_layer_with_gas_payer(gas_payer, zero_gas_limit, &biller);
         assert!(result.is_ok(), "Zero gas limit should be allowed");
     }
 
