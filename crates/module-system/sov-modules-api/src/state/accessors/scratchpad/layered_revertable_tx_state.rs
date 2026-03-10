@@ -283,14 +283,6 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                 }
             };
 
-            // Check if there's enough gas in the meter
-            if meter.remaining_gas.checked_sub(gas_limit).is_none() {
-                return Err(GasPayerError::InsufficientGas {
-                    required: gas_limit,
-                    available: meter.remaining_gas,
-                });
-            }
-
             let gas_cost = gas_limit.value(meter.gas_price);
             let remaining_funds = meter
                 .remaining_funds
@@ -322,8 +314,10 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
 
         if let Some(meter) = self.inner.try_as_basic_gas_meter() {
             // Perform the meter swap: set remaining_funds to the gas limit cost
-            // This caps how much gas the layer can consume (User B pays up to gas_limit)
+            // and set remaining_gas to the requested gas_limit to give the gas payer
+            // an independent budget (not constrained by outer meter's remaining_gas)
             meter.remaining_funds = Some(gas_cost);
+            meter.remaining_gas = gas_limit;
         }
 
         Ok(snapshot)
