@@ -289,23 +289,6 @@ pub struct PreferredBatchData {
     pub visible_slots_to_advance: NonZero<u8>,
 }
 
-/// Extended batch data that includes transaction hashes for encrypted batches.
-/// Used when encryption is enabled to allow STF runners to access tx hashes
-/// without needing to decrypt and recompute them.
-#[derive(Debug, PartialEq, Eq, Clone, BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
-pub struct PreferredBatchDataWithHashes {
-    /// The sequence number of the batch/proof.
-    pub sequence_number: u64,
-    /// The transaction data (with individual tx.data fields encrypted).
-    pub data: Arc<Vec<FullyBakedTx>>,
-    /// The number of visible slots to advance after processing the batch. Minimum 1.
-    pub visible_slots_to_advance: NonZero<u8>,
-    /// Transaction hashes corresponding to the transactions in data.
-    /// Included when the batch is encrypted to allow STF runners to access
-    /// transaction hashes without decrypting the transaction data.
-    pub tx_hashes: Arc<Vec<sov_modules_api::TxHash>>,
-}
-
 /// Encrypted batch data where the entire Vec<FullyBakedTx> is encrypted as one blob.
 /// Used when encryption is enabled for better efficiency than per-transaction encryption.
 #[derive(Debug, PartialEq, Eq, Clone, BorshDeserialize, BorshSerialize, Serialize, Deserialize)]

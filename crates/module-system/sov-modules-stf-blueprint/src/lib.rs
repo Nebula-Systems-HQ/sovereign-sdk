@@ -441,8 +441,8 @@ where
         // Set current slot number in encryption layer for proactive key activation
         if let Some(_encryption_layer) = encryption_layer {
             let slot_number = slot_header.height();
-            tracing::info!(
-                "📦 STF: Processing slot {} for batch processing and decryption",
+            tracing::debug!(
+                "STF: Processing slot {} for batch processing and decryption",
                 slot_number
             );
         }

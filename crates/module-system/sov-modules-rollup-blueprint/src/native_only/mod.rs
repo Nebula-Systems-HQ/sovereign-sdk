@@ -402,7 +402,13 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
                     tracing::info!(
                         "🔐 Creating shared encryption layer for STF and sequencer synchronization"
                     );
-                    Some(sov_encryption::EncryptionLayer::new(config).await?)
+                    Some(
+                        sov_encryption::EncryptionLayer::new(
+                            config,
+                            Some(main_shutdown_receiver.clone()),
+                        )
+                        .await?,
+                    )
                 } else {
                     None
                 }

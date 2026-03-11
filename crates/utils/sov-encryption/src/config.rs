@@ -6,15 +6,18 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum KeyClientConfig {
-    /// Static key configuration (no external fetching)
+    /// Static key configuration (no external fetching).
+    ///
+    /// Currently supports symmetric AES-256-GCM only. For future asymmetric encryption
+    /// support (HPKE with Kyber KEM for forced inclusion transactions), an algorithm type
+    /// will be added to InternalKey and keys will be delivered via the Unix socket key
+    /// service with type metadata. See PR2_REVIEW_PLAN.md "Asymmetric Encryption Roadmap".
     Static {
-        /// Hex-encoded encryption key
+        /// Hex-encoded AES-256-GCM encryption key (must be exactly 32 bytes / 64 hex chars)
         encryption_key: String,
-        /// Hex-encoded decryption key (if different from encryption key)
-        decryption_key: Option<String>,
     },
 
     /// Unix socket key client
@@ -49,6 +52,35 @@ fn default_max_retries() -> u32 {
 #[cfg(feature = "unix-client")]
 fn default_retry_delay_ms() -> u64 {
     1000 // 1 second
+}
+
+impl std::fmt::Debug for KeyClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeyClientConfig::Static { .. } => f
+                .debug_struct("Static")
+                .field("encryption_key", &"[REDACTED]")
+                .finish(),
+            #[cfg(feature = "unix-client")]
+            KeyClientConfig::UnixSocket {
+                socket_path,
+                timeout,
+                max_retries,
+                retry_delay_ms,
+                initial_key,
+            } => f
+                .debug_struct("UnixSocket")
+                .field("socket_path", socket_path)
+                .field("timeout", timeout)
+                .field("max_retries", max_retries)
+                .field("retry_delay_ms", retry_delay_ms)
+                .field(
+                    "initial_key",
+                    &initial_key.as_ref().map(|_| "[REDACTED]"),
+                )
+                .finish(),
+        }
+    }
 }
 
 impl KeyClientConfig {

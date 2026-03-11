@@ -15,7 +15,7 @@ default = ["aes-encryption"]
 aes-encryption = ["aes-gcm", "rand"]
 
 # Key client implementations
-unix-client = ["tokio/net"]
+unix-client = ["tokio/net", "tokio/macros"]
 
 [dependencies]
 # Core encryption (optional, enabled by default)
@@ -23,7 +23,7 @@ aes-gcm = { version = "0.10", default-features = false, features = ["aes", "allo
 rand = { workspace = true, optional = true }
 
 # Async runtime (needed for key listener)
-tokio = { workspace = true, features = ["time", "net", "rt", "io-util"] }
+tokio = { workspace = true, features = ["time", "net", "rt", "io-util", "sync"] }
 tokio-util = { version = "0.7", features = ["codec"] }
 futures = { workspace = true, features = ["alloc"] }
 async-trait = { workspace = true }

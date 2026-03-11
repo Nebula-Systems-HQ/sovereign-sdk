@@ -358,22 +358,15 @@
     "KeyClientConfig": {
       "oneOf": [
         {
-          "description": "Static key configuration (no external fetching)",
+          "description": "Static key configuration (no external fetching). Currently supports symmetric AES-256-GCM only.",
           "type": "object",
           "required": [
             "encryption_key",
             "type"
           ],
           "properties": {
-            "decryption_key": {
-              "description": "Hex-encoded decryption key (if different from encryption key)",
-              "type": [
-                "string",
-                "null"
-              ]
-            },
             "encryption_key": {
-              "description": "Hex-encoded encryption key",
+              "description": "Hex-encoded AES-256-GCM encryption key (must be exactly 32 bytes / 64 hex chars)",
               "type": "string"
             },
             "type": {

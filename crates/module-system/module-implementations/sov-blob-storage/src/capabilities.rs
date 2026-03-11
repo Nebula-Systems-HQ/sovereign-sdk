@@ -830,7 +830,12 @@ impl<S: Spec> BlobStorage<S> {
                     BlobData::Batch((batch.data, *preferred_sequencer))
                 }
                 PreferredBlobData::EncryptedBatch(_) => {
-                    // This should never happen since process_batch_from_blob always returns Batch
+                    // Genuinely unreachable: the pipeline always decrypts encrypted batches
+                    // inside process_batch_from_blob() → decrypt_and_deserialize_batch(),
+                    // which returns PreferredBatchData. That gets wrapped as
+                    // PreferredBlobData::Batch before reaching this function.
+                    // The EncryptedBatch variant exists on the enum for Borsh serialization
+                    // of the deferred blob storage map, but only Batch/Proof are ever stored.
                     unreachable!("EncryptedBatch should not reach add_preferred_blobs_to_selection")
                 }
                 PreferredBlobData::Proof(proof) => {
@@ -1147,33 +1152,35 @@ impl<S: Spec> BlobStorage<S> {
             state,
         )?;
 
-        tracing::info!(
-            "🔓 STF: Deserializing encrypted batch #{} with key '{}'",
+        tracing::debug!(
+            "STF: Decrypting batch #{} with key '{}'",
             encrypted_batch.sequence_number,
             encrypted_batch.encryption_key_id
         );
 
         // Decrypt the transaction data using the specific key ID
         // Old keys are automatically pruned after decryption
-        // Panic if decryption fails - this indicates a critical operational issue
-        let decrypted_txs_bytes = encryption_layer
+        let decrypted_txs_bytes = match encryption_layer
             .decrypt_with_key_id(
                 &encrypted_batch.encryption_key_id,
                 &encrypted_batch.encrypted_txs_data,
-            )
-            .unwrap_or_else(|e| {
-                panic!(
-                    "❌ STF: Failed to decrypt batch #{} with key '{}': {}. \
-                    This indicates the encryption key is not available or data is corrupted.",
+            ) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::error!(
+                    "STF: Failed to decrypt batch #{} with key '{}': {}. \
+                    Skipping batch — encryption key may not be available or data is corrupted.",
                     encrypted_batch.sequence_number, encrypted_batch.encryption_key_id, e
                 );
-            });
+                return None;
+            }
+        };
 
         // Deserialize the decrypted transactions
         let txs = self.deserialize_transaction_data(&decrypted_txs_bytes, &encrypted_batch)?;
 
-        tracing::info!(
-            "✅ STF: Successfully decrypted batch #{} with {} transactions using key '{}'",
+        tracing::debug!(
+            "STF: Decrypted batch #{} with {} transactions using key '{}'",
             encrypted_batch.sequence_number,
             txs.len(),
             encrypted_batch.encryption_key_id
