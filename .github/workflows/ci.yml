@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [nightly, dev]
+    branches: [nightly, dev-sync]
   pull_request:
   workflow_dispatch:
 

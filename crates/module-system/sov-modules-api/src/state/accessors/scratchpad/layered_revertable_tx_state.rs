@@ -332,11 +332,7 @@ impl<S: Spec, I: TxState<S>> PerBlockCache for LayeredRevertableTxState<'_, S, I
 }
 
 impl<S: Spec, I: TxState<S>> EventContainer for LayeredRevertableTxState<'_, S, I> {
-    fn add_event<E: 'static + core::marker::Send + core::marker::Sync>(
-        &mut self,
-        event_key: &str,
-        event: E,
-    ) {
+    fn add_event<E: 'static + core::marker::Send + core::marker::Sync>(&mut self, event_key: &str, event: E) {
         if self.layers.is_empty() {
             // No layers, add event directly to inner state
             self.inner.add_event(event_key, event);
