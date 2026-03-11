@@ -255,7 +255,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         biller: &mut B,
     ) -> Result<&mut Self, GasPayerError<S::Gas>> {
         let gas_snapshot =
-            self.validate_and_swap_gas_payer(gas_payer.clone(), gas_limit, sequencer, biller)?;
+            self.validate_and_swap_gas_payer(gas_payer, gas_limit, sequencer, biller)?;
         self.layers
             .push(StateLayer::new_with_gas_payer(gas_payer, gas_snapshot));
         Ok(self)
@@ -1552,7 +1552,12 @@ mod tests {
         let gas_limit = <TestSpec as Spec>::Gas::ZEROED;
         let mut biller = MockBiller::with_balance(Amount::MAX);
         layered_state
-            .add_revertable_layer_with_gas_payer(gas_payer.clone(), gas_limit, &sequencer, &mut biller)
+            .add_revertable_layer_with_gas_payer(
+                gas_payer.clone(),
+                gas_limit,
+                &sequencer,
+                &mut biller,
+            )
             .unwrap();
 
         assert_eq!(layered_state.layer_depth(), 1);
@@ -1864,7 +1869,10 @@ mod tests {
             &mut biller,
         );
         // Should succeed - gas payer gets independent budget
-        assert!(result.is_ok(), "Should succeed - gas payer gets independent budget");
+        assert!(
+            result.is_ok(),
+            "Should succeed - gas payer gets independent budget"
+        );
 
         // Verify the meter was swapped to the new gas_limit (not constrained by outer)
         if let Some(meter) = layered_state.inner.try_as_basic_gas_meter() {
@@ -1894,8 +1902,12 @@ mod tests {
         // Zero gas limit should be allowed (no-op layer)
         let zero_gas_limit = <TestSpec as Spec>::Gas::ZEROED;
 
-        let result =
-            layered_state.add_revertable_layer_with_gas_payer(gas_payer, zero_gas_limit, &sequencer, &mut biller);
+        let result = layered_state.add_revertable_layer_with_gas_payer(
+            gas_payer,
+            zero_gas_limit,
+            &sequencer,
+            &mut biller,
+        );
         assert!(result.is_ok(), "Zero gas limit should be allowed");
     }
 

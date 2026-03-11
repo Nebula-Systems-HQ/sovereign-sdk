@@ -330,11 +330,9 @@ where
     metrics.timings.refund_remaining_gas_access_metrics = scratchpad.metrics().take();
 
     metrics.timings.reward_prover_timer.start();
-    runtime.gas_enforcer().reward_prover(
-        &base_fee_val,
-        operating_mode,
-        &mut scratchpad,
-    );
+    runtime
+        .gas_enforcer()
+        .reward_prover(&base_fee_val, operating_mode, &mut scratchpad);
     metrics.timings.reward_prover_timer.end();
     metrics.timings.reward_prover_access_metrics = scratchpad.metrics().take();
 
