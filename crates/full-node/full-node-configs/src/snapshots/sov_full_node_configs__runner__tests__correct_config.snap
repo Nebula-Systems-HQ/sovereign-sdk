@@ -1,12 +1,6 @@
 ---
 source: crates/full-node/full-node-configs/src/runner.rs
-<<<<<<< HEAD
-<<<<<<< HEAD:crates/full-node/full-node-configs/src/snapshots/full_node_configs__runner__tests__correct_config.snap
-=======
-assertion_line: 226
->>>>>>> origin/feat/lrtsv2-dec31:crates/full-node/full-node-configs/src/snapshots/sov_full_node_configs__runner__tests__correct_config.snap
-=======
->>>>>>> da376562d0037cb3707f17ed696b3c963b4626bd
+assertion_line: 236
 expression: config
 ---
 {
