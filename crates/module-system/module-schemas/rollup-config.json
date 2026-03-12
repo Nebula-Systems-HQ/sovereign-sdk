@@ -358,7 +358,7 @@
     "KeyClientConfig": {
       "oneOf": [
         {
-          "description": "Static key configuration (no external fetching). Currently supports symmetric AES-256-GCM only.",
+          "description": "Static key configuration (no external fetching).\n\nCurrently supports symmetric AES-256-GCM only. For future asymmetric encryption support (HPKE with Kyber KEM for forced inclusion transactions), an algorithm type will be added to InternalKey and keys will be delivered via the Unix socket key service with type metadata. See PR2_REVIEW_PLAN.md \"Asymmetric Encryption Roadmap\".",
           "type": "object",
           "required": [
             "encryption_key",

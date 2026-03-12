@@ -11,10 +11,7 @@ use serde::{Deserialize, Serialize};
 pub enum KeyClientConfig {
     /// Static key configuration (no external fetching).
     ///
-    /// Currently supports symmetric AES-256-GCM only. For future asymmetric encryption
-    /// support (HPKE with Kyber KEM for forced inclusion transactions), an algorithm type
-    /// will be added to InternalKey and keys will be delivered via the Unix socket key
-    /// service with type metadata. See PR2_REVIEW_PLAN.md "Asymmetric Encryption Roadmap".
+    /// Currently supports symmetric AES-256-GCM only.
     Static {
         /// Hex-encoded AES-256-GCM encryption key (must be exactly 32 bytes / 64 hex chars)
         encryption_key: String,
@@ -74,10 +71,7 @@ impl std::fmt::Debug for KeyClientConfig {
                 .field("timeout", timeout)
                 .field("max_retries", max_retries)
                 .field("retry_delay_ms", retry_delay_ms)
-                .field(
-                    "initial_key",
-                    &initial_key.as_ref().map(|_| "[REDACTED]"),
-                )
+                .field("initial_key", &initial_key.as_ref().map(|_| "[REDACTED]"))
                 .finish(),
         }
     }

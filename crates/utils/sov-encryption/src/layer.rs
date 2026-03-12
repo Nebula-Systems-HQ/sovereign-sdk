@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 use tokio::net::{UnixListener, UnixStream};
 #[cfg(feature = "unix-client")]
 use tokio_util::codec::{FramedRead, LengthDelimitedCodec};
-use tracing::{debug, info, warn};
 #[cfg(feature = "unix-client")]
 use tracing::error;
+use tracing::{debug, info, warn};
 
 #[cfg(feature = "aes-encryption")]
 use aes_gcm::{
@@ -234,11 +234,7 @@ impl EncryptionLayer {
                 }
 
                 // Start unix socket listener for key pushes (spawns detached background task)
-                Self::spawn_key_listener(
-                    key_cache.clone(),
-                    socket_path.clone(),
-                    shutdown_receiver,
-                );
+                Self::spawn_key_listener(key_cache.clone(), socket_path.clone(), shutdown_receiver);
                 info!(
                     "Started key listener for unix socket key client at {:?}",
                     socket_path
@@ -359,7 +355,7 @@ impl EncryptionLayer {
     /// Errors are surfaced through logging, not return values. The task is designed
     /// to be resilient and recover from transient failures.
     ///
-    /// If `shutdown_receiver` is `None`, the listener runs indefinitely (legacy behavior).
+    /// If `shutdown_receiver` is `None`, the listener runs indefinitely.
     ///
     /// This is a static method that spawns a detached background task. The task
     /// runs independently and is not tied to any particular `EncryptionLayer` instance.
@@ -743,7 +739,9 @@ mod tests {
     /// Helper: create a valid 32-byte test key from a seed byte.
     /// Produces an asymmetric byte pattern to catch endianness bugs.
     fn make_test_key_bytes(seed: u8) -> Vec<u8> {
-        (0u8..32).map(|i| i.wrapping_add(seed).wrapping_mul(7).wrapping_add(3)).collect()
+        (0u8..32)
+            .map(|i| i.wrapping_add(seed).wrapping_mul(7).wrapping_add(3))
+            .collect()
     }
 
     /// Helper: create an EncryptionLayer with a single key pre-loaded.
@@ -845,9 +843,7 @@ mod tests {
         let layer = make_layer_with_key("test-key", key_bytes.clone());
 
         // 1 MB of data with a recognizable pattern
-        let plaintext: Vec<u8> = (0..1_048_576u32)
-            .map(|i| (i % 251) as u8)
-            .collect();
+        let plaintext: Vec<u8> = (0..1_048_576u32).map(|i| (i % 251) as u8).collect();
 
         let encrypted = layer.encrypt_with_key(&key_bytes, &plaintext).unwrap();
         let decrypted = layer.decrypt_with_key(&key_bytes, &encrypted).unwrap();
@@ -871,10 +867,7 @@ mod tests {
         assert_eq!(retrieved.unwrap().id, "key-alpha");
 
         let missing = cache.get_key_by_id("nonexistent");
-        assert!(
-            missing.is_none(),
-            "Nonexistent key id should return None"
-        );
+        assert!(missing.is_none(), "Nonexistent key id should return None");
     }
 
     #[test]
@@ -918,8 +911,14 @@ mod tests {
     fn test_key_cache_get_for_slot_fallback() {
         let cache = KeyCache::new();
         // All keys have slots greater than the requested slot
-        cache.add_key(1000, make_internal_key("key-future-1", make_test_key_bytes(0x11)));
-        cache.add_key(2000, make_internal_key("key-future-2", make_test_key_bytes(0x12)));
+        cache.add_key(
+            1000,
+            make_internal_key("key-future-1", make_test_key_bytes(0x11)),
+        );
+        cache.add_key(
+            2000,
+            make_internal_key("key-future-2", make_test_key_bytes(0x12)),
+        );
 
         // Request slot 500 — all keys have slot > 500, so fallback to the most recent (back of queue)
         let key = cache.get_key_for_slot(500).unwrap();
@@ -945,7 +944,11 @@ mod tests {
         // Position of D is 3. remove_count = 3 - 2 = 1, so remove A.
         // Remaining: [B, C, D, E]
         cache.prune_keys_before_id("D", 2);
-        assert_eq!(cache.len(), 4, "After pruning at D with buffer=2, should have 4 keys");
+        assert_eq!(
+            cache.len(),
+            4,
+            "After pruning at D with buffer=2, should have 4 keys"
+        );
 
         // A should be gone
         assert!(
@@ -953,10 +956,22 @@ mod tests {
             "Key A should have been pruned"
         );
         // B, C, D, E should remain
-        assert!(cache.get_key_by_id("B").is_some(), "Key B should be retained as buffer");
-        assert!(cache.get_key_by_id("C").is_some(), "Key C should be retained as buffer");
-        assert!(cache.get_key_by_id("D").is_some(), "Key D should still exist");
-        assert!(cache.get_key_by_id("E").is_some(), "Key E should still exist");
+        assert!(
+            cache.get_key_by_id("B").is_some(),
+            "Key B should be retained as buffer"
+        );
+        assert!(
+            cache.get_key_by_id("C").is_some(),
+            "Key C should be retained as buffer"
+        );
+        assert!(
+            cache.get_key_by_id("D").is_some(),
+            "Key D should still exist"
+        );
+        assert!(
+            cache.get_key_by_id("E").is_some(),
+            "Key E should still exist"
+        );
     }
 
     #[test]

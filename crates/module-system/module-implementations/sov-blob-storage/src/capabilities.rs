@@ -830,10 +830,6 @@ impl<S: Spec> BlobStorage<S> {
                     BlobData::Batch((batch.data, *preferred_sequencer))
                 }
                 PreferredBlobData::EncryptedBatch(_) => {
-                    // Genuinely unreachable: the pipeline always decrypts encrypted batches
-                    // inside process_batch_from_blob() → decrypt_and_deserialize_batch(),
-                    // which returns PreferredBatchData. That gets wrapped as
-                    // PreferredBlobData::Batch before reaching this function.
                     // The EncryptedBatch variant exists on the enum for Borsh serialization
                     // of the deferred blob storage map, but only Batch/Proof are ever stored.
                     unreachable!("EncryptedBatch should not reach add_preferred_blobs_to_selection")
@@ -1160,17 +1156,18 @@ impl<S: Spec> BlobStorage<S> {
 
         // Decrypt the transaction data using the specific key ID
         // Old keys are automatically pruned after decryption
-        let decrypted_txs_bytes = match encryption_layer
-            .decrypt_with_key_id(
-                &encrypted_batch.encryption_key_id,
-                &encrypted_batch.encrypted_txs_data,
-            ) {
+        let decrypted_txs_bytes = match encryption_layer.decrypt_with_key_id(
+            &encrypted_batch.encryption_key_id,
+            &encrypted_batch.encrypted_txs_data,
+        ) {
             Ok(bytes) => bytes,
             Err(e) => {
                 tracing::error!(
                     "STF: Failed to decrypt batch #{} with key '{}': {}. \
                     Skipping batch — encryption key may not be available or data is corrupted.",
-                    encrypted_batch.sequence_number, encrypted_batch.encryption_key_id, e
+                    encrypted_batch.sequence_number,
+                    encrypted_batch.encryption_key_id,
+                    e
                 );
                 return None;
             }
