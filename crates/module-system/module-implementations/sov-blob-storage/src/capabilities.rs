@@ -1129,7 +1129,7 @@ impl<S: Spec> BlobStorage<S> {
                 self.deserialize_or_try_slash_sender::<PreferredBatchData>(
                     blob,
                     charge_for_deserialization.map(|(seq, price)| (seq, *price)),
-                    false,
+                    true,
                     state,
                 )
             }
