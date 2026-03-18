@@ -319,20 +319,20 @@ where
     let transaction_consumption = &apply_tx.transaction_consumption;
 
     metrics.timings.refund_remaining_gas_timer.start();
+    let remaining = transaction_consumption.remaining_funds();
+    let base_fee_val = transaction_consumption.base_fee_value();
     runtime.gas_enforcer().refund_remaining_gas(
         ctx.gas_refund_recipient(),
-        &transaction_consumption.remaining_funds(),
+        &remaining,
         &mut scratchpad,
     );
     metrics.timings.refund_remaining_gas_timer.end();
     metrics.timings.refund_remaining_gas_access_metrics = scratchpad.metrics().take();
 
     metrics.timings.reward_prover_timer.start();
-    runtime.gas_enforcer().reward_prover(
-        &transaction_consumption.base_fee_value(),
-        operating_mode,
-        &mut scratchpad,
-    );
+    runtime
+        .gas_enforcer()
+        .reward_prover(&base_fee_val, operating_mode, &mut scratchpad);
     metrics.timings.reward_prover_timer.end();
     metrics.timings.reward_prover_access_metrics = scratchpad.metrics().take();
 
