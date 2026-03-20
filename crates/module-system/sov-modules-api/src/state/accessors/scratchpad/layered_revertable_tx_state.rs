@@ -13,6 +13,7 @@ use super::super::{BorshSerializedSize, StateMetricsProvider, UniversalStateAcce
 use crate::module::Spec;
 use crate::state::traits::delegate_version_reader;
 use crate::state::traits::PerBlockCache;
+use crate::transaction::PriorityFeeBips;
 use crate::{
     AccessoryStateWriter, Amount, BasicGasMeter, Gas, GasArray, GasBiller, GasBillingError,
     GasMeter, GasMeteringError, ProvableStateReader, ProvableStateWriter, TxState,
@@ -42,8 +43,7 @@ pub struct GasSnapshot<S: Spec> {
     /// Gas price at layer creation (for refund calculation).
     pub gas_price: <S::Gas as Gas>::Price,
     /// Priority fee rate in basis points (1 bip = 0.01%).
-    /// Priority fee = actual_base_cost * priority_fee_bips / 10_000.
-    pub priority_fee_bips: u64,
+    pub priority_fee_bips: PriorityFeeBips,
 }
 
 /// Billing info extracted from a layer before it's consumed (committed/reverted).
@@ -308,8 +308,11 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         }; // meter borrow dropped
 
         // Include priority fee in the upfront reservation so the full amount is locked
-        // before execution. upfront = base_cost + base_cost * priority_fee_bips / 10_000
-        let priority_reservation = Amount(gas_cost.0 * priority_fee_bips as u128 / 10_000);
+        // before execution. upfront = base_cost + priority_fee(base_cost)
+        let priority_fee_bips = PriorityFeeBips(priority_fee_bips);
+        let priority_reservation = priority_fee_bips
+            .apply(gas_cost)
+            .unwrap_or(Amount::ZERO);
         let upfront_charge = Amount(gas_cost.0.saturating_add(priority_reservation.0));
 
         // Phase 2: Read gas payer's balance (borrow self.inner as StateAccessor)
@@ -391,9 +394,12 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         // Phase 1: Calculate actual gas cost using stored gas_price
         let actual_cost = info.gas_consumed.value(info.gas_snapshot.gas_price);
 
-        // Priority fee is charged on actual consumption: actual_base * priority_fee_bips / 10_000
-        let actual_priority_fee =
-            Amount(actual_cost.0 * info.gas_snapshot.priority_fee_bips as u128 / 10_000);
+        // Priority fee is charged on actual consumption only
+        let actual_priority_fee = info
+            .gas_snapshot
+            .priority_fee_bips
+            .apply(actual_cost)
+            .unwrap_or(Amount::ZERO);
         let actual_total = Amount(actual_cost.0.saturating_add(actual_priority_fee.0));
 
         // Phase 2: Calculate and transfer refund (borrow self.inner as StateAccessor)
