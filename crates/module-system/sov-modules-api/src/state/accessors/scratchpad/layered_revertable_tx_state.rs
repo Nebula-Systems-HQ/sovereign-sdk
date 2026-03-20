@@ -798,6 +798,10 @@ mod tests {
         balance: Option<Amount>,
         /// Track total amount transferred (for test assertions)
         total_transferred: Amount,
+        /// Track total amount refunded (sequencer → payer transfers)
+        total_refunded: Amount,
+        /// The sequencer address, used to detect refund direction
+        sequencer: Option<<TestSpec as crate::Spec>::Address>,
     }
 
     impl MockBiller {
@@ -805,6 +809,20 @@ mod tests {
             Self {
                 balance: Some(balance),
                 total_transferred: Amount::ZERO,
+                total_refunded: Amount::ZERO,
+                sequencer: None,
+            }
+        }
+
+        fn with_balance_and_sequencer(
+            balance: Amount,
+            sequencer: <TestSpec as crate::Spec>::Address,
+        ) -> Self {
+            Self {
+                balance: Some(balance),
+                total_transferred: Amount::ZERO,
+                total_refunded: Amount::ZERO,
+                sequencer: Some(sequencer),
             }
         }
     }
@@ -820,12 +838,20 @@ mod tests {
 
         fn transfer_gas_tokens(
             &mut self,
-            _from: &S::Address,
+            from: &S::Address,
             _to: &S::Address,
             amount: Amount,
             _state: &mut impl StateAccessor,
         ) -> Result<(), GasBillingError> {
             self.total_transferred = self.total_transferred.checked_add(amount).unwrap();
+            // Detect refund: sequencer is the sender
+            if let Some(ref seq) = self.sequencer {
+                let seq_bytes = borsh::to_vec(seq).unwrap();
+                let from_bytes = borsh::to_vec(from).unwrap();
+                if seq_bytes == from_bytes {
+                    self.total_refunded = self.total_refunded.checked_add(amount).unwrap();
+                }
+            }
             Ok(())
         }
     }
@@ -2092,5 +2118,77 @@ mod tests {
         let mut metric = StateAccessMetric::new_read();
         let read_value = layered_state.get_value(namespace, &key, &mut metric);
         assert_eq!(read_value, Some(value), "Data should be committed");
+    }
+
+    #[test]
+    fn test_priority_fee_bips_billing() {
+        use crate::{Amount, Gas, GasMeter, Spec};
+        let storage_manager = SimpleStorageManager::new();
+        let storage = storage_manager.create_storage();
+
+        // gas_price = 1 per dimension, so gas cost = sum of dimension values
+        let gas_price = <<TestSpec as Spec>::Gas as Gas>::Price::from([Amount::new(1); 2]);
+        let initial_funds = Amount::new(10_000);
+        let mut working_set =
+            WorkingSet::<TestSpec>::new_with_gas_meter(storage, initial_funds, &gas_price);
+
+        let mut layered_state = LayeredRevertableTxState::new(&mut working_set);
+
+        let gas_payer = <TestSpec as crate::Spec>::Address::from([1u8; 28]);
+        let sequencer = <TestSpec as crate::Spec>::Address::from([2u8; 28]);
+        let gas_limit = <TestSpec as Spec>::Gas::from([100u64, 100u64]);
+
+        // 500 bips = 5% priority fee
+        let priority_fee_bips = 500u64;
+        let mut biller = MockBiller::with_balance_and_sequencer(Amount::MAX, sequencer);
+
+        layered_state
+            .add_revertable_layer_with_gas_payer(
+                gas_payer,
+                gas_limit,
+                &sequencer,
+                &mut biller,
+                priority_fee_bips,
+            )
+            .unwrap();
+
+        // Upfront charge should be gas_cost + 5% = 200 + 10 = 210
+        let gas_cost = gas_limit.value(gas_price); // 100*1 + 100*1 = 200
+        let expected_upfront = Amount::new(gas_cost.0 + gas_cost.0 * 500 / 10_000); // 210
+        assert_eq!(
+            biller.total_transferred, expected_upfront,
+            "Upfront charge should include 5% priority fee"
+        );
+
+        // Consume 40 gas per dimension (80 total cost at price=1)
+        let gas_to_charge = <TestSpec as Spec>::Gas::from([40u64, 40u64]);
+        if let Some(meter) = layered_state.inner.try_as_basic_gas_meter() {
+            meter.charge_gas(gas_to_charge).expect("Should charge gas");
+        }
+        layered_state.track_gas_in_layer(gas_to_charge);
+
+        // Commit — should refund unused portion
+        layered_state
+            .commit_layer(&mut biller, &sequencer)
+            .expect("commit_layer should succeed");
+
+        // actual_cost = 80, actual_priority = 80 * 500 / 10_000 = 4, actual_total = 84
+        // refund = 210 - 84 = 126
+        let actual_cost = gas_to_charge.value(gas_price); // 80
+        let actual_priority = Amount::new(actual_cost.0 * 500 / 10_000); // 4
+        let actual_total = Amount::new(actual_cost.0 + actual_priority.0); // 84
+        let expected_refund = Amount::new(expected_upfront.0 - actual_total.0); // 126
+
+        assert_eq!(
+            biller.total_refunded, expected_refund,
+            "Refund should return unused gas + unused priority fee reservation"
+        );
+
+        // Net cost to payer = upfront - refund = actual_total = 84
+        let net_cost = Amount::new(expected_upfront.0 - biller.total_refunded.0);
+        assert_eq!(
+            net_cost, actual_total,
+            "Net cost should equal actual gas + actual priority fee"
+        );
     }
 }
