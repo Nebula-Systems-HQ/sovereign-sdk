@@ -134,7 +134,14 @@ impl<S: Spec> BasicGasMeter<S> {
             let gas_used = self
                 .initial_gas
                 .checked_sub(new_remaining_gas)
-                .expect("The remaining gas can't be greater than the initial gas");
+                .unwrap_or_else(|| {
+                    panic!(
+                        "The remaining gas can't be greater than the initial gas. \
+                        initial_gas: {:?}, new_remaining_gas: {:?}, amount_charged: {:?}, \
+                        remaining_funds: {:?}",
+                        self.initial_gas, new_remaining_gas, amount, self.remaining_funds
+                    )
+                });
 
             gas_used.checked_value(self.gas_price).ok_or_else(|| {
                 GasMeteringError::Overflow(
