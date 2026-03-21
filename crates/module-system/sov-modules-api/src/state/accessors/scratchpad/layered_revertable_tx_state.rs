@@ -332,6 +332,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             // and set remaining_gas to the requested gas_limit to give the gas payer
             // an independent budget (not constrained by outer meter's remaining_gas)
             meter.remaining_funds = Some(gas_cost);
+            meter.initial_gas = gas_limit;
             meter.remaining_gas = gas_limit;
         }
 
@@ -391,7 +392,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
 
         // Phase 3: Restore outer payer's meter state (borrow meter again)
         if let Some(meter) = self.inner.try_as_basic_gas_meter() {
-            meter.remaining_gas = info
+            let new_remaining = info
                 .gas_snapshot
                 .outer_remaining_gas
                 .checked_sub(info.gas_consumed)
@@ -400,6 +401,8 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                         "Gas consumed exceeds outer remaining gas".to_string(),
                     )
                 })?;
+            meter.initial_gas = info.gas_snapshot.outer_remaining_gas;
+            meter.remaining_gas = new_remaining;
             meter.remaining_funds = Some(info.gas_snapshot.outer_remaining_funds);
         }
 
