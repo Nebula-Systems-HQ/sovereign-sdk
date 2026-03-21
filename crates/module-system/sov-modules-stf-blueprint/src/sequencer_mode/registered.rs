@@ -342,8 +342,9 @@ where
     {
         use sov_state::EventContainer;
         let gas_payer = ctx.gas_refund_recipient();
-        let gas_amount = base_fee_val.0;
-        if gas_amount > 0 {
+        let priority_fee = transaction_consumption.priority_fee();
+        let gas_amount = Amount::new(base_fee_val.0.0 + priority_fee.0.0);
+        if gas_amount > Amount::ZERO {
             runtime.on_gas_charged(
                 &mut scratchpad,
                 gas_payer,
