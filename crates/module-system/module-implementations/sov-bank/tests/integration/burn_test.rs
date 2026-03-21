@@ -38,7 +38,7 @@ fn burn_deployed_tokens_happy_path() {
         ),
         assert: Box::new(move |result, state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
                 TestBankRuntimeEvent::Bank(Event::TokenBurned {
                     owner: TokenHolder::User(user_address),
@@ -47,7 +47,7 @@ fn burn_deployed_tokens_happy_path() {
                         token_id
                     }
                 }),
-                result.events[0]
+                *result.events.last().unwrap()
             );
 
             // Check that the user's balance is now zero
@@ -234,7 +234,7 @@ fn test_burning_zero_tokens_works() {
         ),
         assert: Box::new(move |result, state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
                 TestBankRuntimeEvent::Bank(Event::TokenBurned {
                     owner: TokenHolder::User(user_address),
@@ -243,7 +243,7 @@ fn test_burning_zero_tokens_works() {
                         token_id
                     }
                 }),
-                result.events[0]
+                *result.events.last().unwrap()
             );
 
             // Check that the user's balance hasn't changed
@@ -282,7 +282,7 @@ fn test_burning_zero_tokens_for_user_with_no_balance() {
         ),
         assert: Box::new(move |result, state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
                 TestBankRuntimeEvent::Bank(Event::TokenBurned {
                     owner: TokenHolder::User(user_address),
@@ -291,7 +291,7 @@ fn test_burning_zero_tokens_for_user_with_no_balance() {
                         token_id
                     }
                 }),
-                result.events[0]
+                *result.events.last().unwrap()
             );
 
             // Check that the user's balance hasn't changed
@@ -376,7 +376,7 @@ fn burn_gas_token_also_works() {
         ),
         assert: Box::new(move |result, state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
                 TestBankRuntimeEvent::Bank(Event::TokenBurned {
                     owner: TokenHolder::User(user_address),
@@ -385,7 +385,7 @@ fn burn_gas_token_also_works() {
                         token_id: config_gas_token_id()
                     }
                 }),
-                result.events[0]
+                *result.events.last().unwrap()
             );
 
             // Check that the user's gas balance is now equal to the burnt amount minus the gas used to send the transaction

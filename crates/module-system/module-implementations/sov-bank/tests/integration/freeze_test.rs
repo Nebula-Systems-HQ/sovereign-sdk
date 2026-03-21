@@ -24,9 +24,9 @@ fn freeze_token_happy_path() {
             .create_plain_message::<RT, Bank<S>>(sov_bank::CallMessage::Freeze { token_id }),
         assert: Box::new(move |result, _| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
-                result.events[0],
+                *result.events.last().unwrap(),
                 TestBankRuntimeEvent::Bank(sov_bank::event::Event::TokenFrozen {
                     freezer: sov_bank::utils::TokenHolder::User(minter_address),
                     token_id

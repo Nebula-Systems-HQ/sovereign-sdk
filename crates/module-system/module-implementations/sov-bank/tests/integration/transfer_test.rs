@@ -41,9 +41,9 @@ fn transfer_token_happy_path() {
         }),
         assert: Box::new(move |result, state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
-                result.events[0],
+                *result.events.last().unwrap(),
                 TestBankRuntimeEvent::Bank(sov_bank::event::Event::TokenTransferred {
                     from: TokenHolder::User(user_high_token_balance_address),
                     to: TokenHolder::User(user_no_token_balance_address),
@@ -109,9 +109,9 @@ fn transfer_token_with_memo_happy_path() {
         ),
         assert: Box::new(move |result, state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
-                result.events[0],
+                *result.events.last().unwrap(),
                 TestBankRuntimeEvent::Bank(sov_bank::event::Event::TokenTransferred {
                     from: TokenHolder::User(user_high_token_balance_address),
                     to: TokenHolder::User(user_no_token_balance_address),
@@ -284,9 +284,9 @@ fn transfer_receiver_does_not_have_balance() {
         }),
         assert: Box::new(move |result, state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
-                result.events[0],
+                *result.events.last().unwrap(),
                 TestBankRuntimeEvent::Bank(sov_bank::event::Event::TokenTransferred {
                     from: TokenHolder::User(sender_address),
                     to: TokenHolder::User(receiver_address),
@@ -339,7 +339,7 @@ fn transfer_sender_equals_receiver_zero_balance() {
         }),
         assert: Box::new(move |result, _state| {
             assert!(result.tx_receipt.is_reverted());
-            assert!(result.events.is_empty());
+            assert_eq!(result.events.len(), 1);
         }),
     });
 
@@ -355,9 +355,9 @@ fn transfer_sender_equals_receiver_zero_balance() {
         }),
         assert: Box::new(move |result, _state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
-                result.events[0],
+                *result.events.last().unwrap(),
                 TestBankRuntimeEvent::Bank(sov_bank::event::Event::TokenTransferred {
                     from: TokenHolder::User(sender_address),
                     to: TokenHolder::User(sender_address),
@@ -401,7 +401,7 @@ fn transfer_sender_equals_receiver() {
             ),
             assert: Box::new(move |result, _state| {
                 assert!(result.tx_receipt.is_reverted());
-                assert_eq!(result.events.len(), 0);
+                assert_eq!(result.events.len(), 1);
             }),
         });
     }
@@ -418,9 +418,9 @@ fn transfer_sender_equals_receiver() {
             ),
             assert: Box::new(move |result, _state| {
                 assert!(result.tx_receipt.is_successful());
-                assert_eq!(result.events.len(), 1);
+                assert_eq!(result.events.len(), 2);
                 assert_eq!(
-                    result.events[0],
+                    *result.events.last().unwrap(),
                     TestBankRuntimeEvent::Bank(sov_bank::event::Event::TokenTransferred {
                         from: TokenHolder::User(sender_address),
                         to: TokenHolder::User(sender_address),
@@ -459,9 +459,9 @@ fn transfer_send_zero_amount() {
         }),
         assert: Box::new(move |result, _state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
-                result.events[0],
+                *result.events.last().unwrap(),
                 TestBankRuntimeEvent::Bank(sov_bank::event::Event::TokenTransferred {
                     from: TokenHolder::User(sender_address),
                     to: TokenHolder::User(receiver_address),
@@ -504,9 +504,9 @@ fn test_transfer_gas_token() {
         }),
         assert: Box::new(move |result, state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
-                result.events[0],
+                *result.events.last().unwrap(),
                 TestBankRuntimeEvent::Bank(sov_bank::event::Event::TokenTransferred {
                     from: TokenHolder::User(sender_address),
                     to: TokenHolder::User(receiver_address),

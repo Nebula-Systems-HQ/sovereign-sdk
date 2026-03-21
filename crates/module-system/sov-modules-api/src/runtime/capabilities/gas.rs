@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::da::DaSpec;
-use sov_state::{Kernel, User};
+use sov_state::{EventContainer, Kernel, User};
 
 use crate::transaction::{AuthenticatedTransactionData, ProverReward, RemainingFunds};
 use crate::{
@@ -58,20 +58,20 @@ pub trait GasEnforcer<S: Spec> {
     /// This method should not fail.
     ///
     /// ## Correctness note
-    /// The caller of this method must ensure that sufficient funds are reserved.  
+    /// The caller of this method must ensure that sufficient funds are reserved.
     /// If there are not enough funds reserved, the method will panic.
     fn reward_prover(
         &mut self,
         prover_rewards: &ProverReward,
         oprating_mode: OperatingMode,
-        tx_scratchpad: &mut impl InfallibleStateAccessor,
+        tx_scratchpad: &mut (impl InfallibleStateAccessor + EventContainer),
     );
 
     /// Refunds any remaining gas to the payer after the transaction is processed.
     /// This method should not fail.
     ///
     /// ## Correctness note
-    /// The caller of this method must ensure that sufficient funds are reserved.  
+    /// The caller of this method must ensure that sufficient funds are reserved.
     /// If there are not enough funds reserved, the method will panic.
     fn refund_remaining_gas(
         &mut self,

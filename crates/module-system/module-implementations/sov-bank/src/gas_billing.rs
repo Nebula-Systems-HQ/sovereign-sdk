@@ -4,6 +4,7 @@
 //! [`LayeredRevertableTxState`]
 
 use sov_modules_api::{Amount, GasBiller, GasBillingError, Spec, StateAccessor};
+use sov_state::EventContainer;
 
 use crate::{config_gas_token_id, Bank, Coins};
 
@@ -22,15 +23,16 @@ impl<S: Spec> GasBiller<S> for Bank<S> {
         from: &S::Address,
         to: &S::Address,
         amount: Amount,
-        state: &mut impl StateAccessor,
+        state: &mut (impl StateAccessor + EventContainer),
     ) -> Result<(), GasBillingError> {
-        self.transfer_from(
+        self.transfer_from_with_memo(
             from,
             to,
             Coins {
                 amount,
                 token_id: config_gas_token_id(),
             },
+            Some("gas_payer_billing".to_string()),
             state,
         )
         .map_err(|e| GasBillingError::TransferError(e.to_string()))

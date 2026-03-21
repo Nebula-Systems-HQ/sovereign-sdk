@@ -336,6 +336,20 @@ where
     metrics.timings.reward_prover_timer.end();
     metrics.timings.reward_prover_access_metrics = scratchpad.metrics().take();
 
+    // Extract gas events (reserve, refund, reward) from the scratchpad and merge into receipt.
+    // Gas events are emitted even for reverted transactions (gas is still consumed).
+    #[cfg(feature = "native")]
+    {
+        let gas_events = scratchpad.take_events();
+        if !gas_events.is_empty() {
+            let mut apply_tx = apply_tx;
+            let gas_stored_events =
+                crate::stf_blueprint::convert_to_runtime_events::<S, R>(gas_events, raw_tx_hash.into());
+            apply_tx.receipt.events.splice(0..0, gas_stored_events);
+            return (Ok(apply_tx), scratchpad, pre_exec_gas_meter);
+        }
+    }
+
     (Ok(apply_tx), scratchpad, pre_exec_gas_meter)
 }
 

@@ -33,9 +33,9 @@ fn mint_token_success() {
         }),
         assert: Box::new(move |result, state| {
             assert!(result.tx_receipt.is_successful());
-            assert_eq!(result.events.len(), 1);
+            assert_eq!(result.events.len(), 2);
             assert_eq!(
-                result.events[0],
+                *result.events.last().unwrap(),
                 TestBankRuntimeEvent::Bank(sov_bank::event::Event::TokenMinted {
                     mint_to_identity: sov_bank::utils::TokenHolder::User(
                         user_no_token_balance.address()
