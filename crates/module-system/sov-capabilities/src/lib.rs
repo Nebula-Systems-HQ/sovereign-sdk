@@ -28,7 +28,7 @@ use sov_rollup_interface::Bytes;
 #[cfg(feature = "native")]
 use sov_rollup_interface::StateUpdateInfo;
 use sov_sequencer_registry::SequencerRegistry;
-use sov_state::{EventContainer, Kernel, User};
+use sov_state::{Kernel, User};
 
 /// Implements the basic capabilities required for a zk-rollup runtime.
 pub struct StandardProvenRollupCapabilities<'a, S: Spec, GasPayer = ()> {
@@ -142,19 +142,18 @@ where
         &mut self,
         prover_rewards: &ProverReward,
         oprating_mode: OperatingMode,
-        state: &mut (impl InfallibleStateAccessor + EventContainer),
+        state: &mut impl InfallibleStateAccessor,
     ) {
         let rewarded_module = self.get_prover_token_holder(oprating_mode, state);
 
         self.bank
-            .transfer_from_with_memo(
+            .transfer_from(
                 self.bank.id.clone().to_payable(),
                 rewarded_module.to_owned().as_token_holder(),
                 Coins {
                     amount: prover_rewards.0,
                     token_id: config_gas_token_id(),
                 },
-                Some("gas_prover_reward".to_string()),
                 state,
             )
             // SAFETY: It is safe to unwrap here because the caller must ensure that sufficient funds are reserved.

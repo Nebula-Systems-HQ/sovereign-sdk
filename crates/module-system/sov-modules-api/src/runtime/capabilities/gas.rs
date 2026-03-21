@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sov_rollup_interface::da::DaSpec;
-use sov_state::{EventContainer, Kernel, User};
+use sov_state::{Kernel, User};
 
 use crate::transaction::{AuthenticatedTransactionData, ProverReward, RemainingFunds};
 use crate::{
@@ -64,7 +64,7 @@ pub trait GasEnforcer<S: Spec> {
         &mut self,
         prover_rewards: &ProverReward,
         oprating_mode: OperatingMode,
-        tx_scratchpad: &mut (impl InfallibleStateAccessor + EventContainer),
+        tx_scratchpad: &mut impl InfallibleStateAccessor,
     );
 
     /// Refunds any remaining gas to the payer after the transaction is processed.

@@ -336,10 +336,22 @@ where
     metrics.timings.reward_prover_timer.end();
     metrics.timings.reward_prover_access_metrics = scratchpad.metrics().take();
 
-    // Extract gas events (reserve, refund, reward) from the scratchpad and merge into receipt.
-    // Gas events are emitted even for reverted transactions (gas is still consumed).
+    // Emit a gas consumed event so the indexer can track gas balance changes.
+    // Uses the Bank module via the runtime to emit a proper TokenTransferred event.
     #[cfg(feature = "native")]
     {
+        use sov_state::EventContainer;
+        let gas_payer = ctx.gas_refund_recipient();
+        let gas_amount = base_fee_val.0;
+        if gas_amount > 0 {
+            runtime.on_gas_charged(
+                &mut scratchpad,
+                gas_payer,
+                &sequencer_rollup_address,
+                gas_amount,
+            );
+        }
+
         let gas_events = scratchpad.take_events();
         if !gas_events.is_empty() {
             let mut apply_tx = apply_tx;
