@@ -4,6 +4,8 @@
 //! gas billing operations. This trait is implemented by the Bank module to enable
 //! gas payer layer billing in [`LayeredRevertableTxState`].
 
+use sov_state::EventContainer;
+
 use crate::{Amount, Spec, StateAccessor};
 
 /// Error type for gas billing operations.
@@ -61,6 +63,6 @@ pub trait GasBiller<S: Spec> {
         from: &S::Address,
         to: &S::Address,
         amount: Amount,
-        state: &mut impl StateAccessor,
+        state: &mut (impl StateAccessor + EventContainer),
     ) -> Result<(), GasBillingError>;
 }
