@@ -235,6 +235,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_max_raw_tx_size_is_10_kb() {
+        assert_eq!(
+            MAX_RAW_TX_SIZE,
+            10 * 1024,
+            "MAX_RAW_TX_SIZE must be 10 KB"
+        );
+    }
+
+    #[test]
     fn test_rawtx_borsh_within_limit() {
         // Create a transaction within the size limit
         let data = vec![1u8; 1024]; // 1KB
