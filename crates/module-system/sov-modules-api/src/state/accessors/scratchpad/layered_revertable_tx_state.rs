@@ -440,6 +440,18 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             biller.transfer_gas_tokens(sequencer, &info.gas_payer, refund, self.inner)?;
         }
 
+        // Emit a single consolidated gas event for the net cost
+        if actual_cost > Amount::ZERO {
+            biller.emit_net_gas_event(
+                &info.gas_payer,
+                sequencer,
+                actual_cost,
+                info.gas_consumed,
+                info.gas_snapshot.gas_price,
+                self.inner,
+            );
+        }
+
         // Record actual gas consumed so callers can read it
         self.last_gas_consumed = Some(info.gas_consumed);
 
