@@ -19,6 +19,12 @@ use crate::{NativeStorage, StateGetter};
 use crate::{NodeLeaf, NodeLeafAndMaybeValue, ReadType};
 use sov_metrics::StateAccessMetric;
 
+/// Context for `get_or_fetch_with_fn`, grouping cache and revertable read state.
+struct GetOrFetchCacheContext<'a> {
+    cache: &'a mut CacheLog,
+    revertable_ordered_reads: &'a mut Vec<(SlotKey, Option<NodeLeafAndMaybeValue>)>,
+}
+
 /// An enum that represents the temperature of a value in the storage.
 /// Used in cached-structs to determine whether this is the first read of a value or not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -530,8 +536,10 @@ impl<N: ProvableCompileTimeNamespace> ProvableStorageCache<N> {
         metric: &mut StateAccessMetric,
     ) -> Option<SlotValue> {
         Self::get_or_fetch_with_fn(
-            &mut self.cache,
-            &mut self.revertable_ordered_reads,
+            &mut GetOrFetchCacheContext {
+                cache: &mut self.cache,
+                revertable_ordered_reads: &mut self.revertable_ordered_reads,
+            },
             key,
             storage,
             witness,
@@ -584,8 +592,10 @@ impl<N: ProvableCompileTimeNamespace> ProvableStorageCache<N> {
         metric: &mut StateAccessMetric,
     ) -> Option<SlotValue> {
         Self::get_or_fetch_with_fn(
-            &mut self.cache,
-            &mut self.revertable_ordered_reads,
+            &mut GetOrFetchCacheContext {
+                cache: &mut self.cache,
+                revertable_ordered_reads: &mut self.revertable_ordered_reads,
+            },
             key,
             storage,
             witness,
@@ -597,8 +607,7 @@ impl<N: ProvableCompileTimeNamespace> ProvableStorageCache<N> {
     }
 
     fn get_or_fetch_with_fn<S: Storage, F, Args, E>(
-        cache: &mut CacheLog,
-        revertable_ordered_reads: &mut Vec<(SlotKey, Option<NodeLeafAndMaybeValue>)>,
+        ctx: &mut GetOrFetchCacheContext<'_>,
         key: &SlotKey,
         storage: &S,
         witness: &S::Witness,
@@ -609,7 +618,7 @@ impl<N: ProvableCompileTimeNamespace> ProvableStorageCache<N> {
     where
         F: Fn(&SlotKey, &S::Witness, Args, &mut StateAccessMetric) -> Result<Option<SlotValue>, E>,
     {
-        if let Some(access) = cache.get_mut(key) {
+        if let Some(access) = ctx.cache.get_mut(key) {
             match access {
                 Access::Read {
                     original: Some(node),
@@ -644,7 +653,7 @@ impl<N: ProvableCompileTimeNamespace> ProvableStorageCache<N> {
                 leaf: NodeLeaf::make_leaf::<S::Hasher>(&v),
                 value: ReadType::Read(v),
             });
-            Self::add_read(key.clone(), read, revertable_ordered_reads, cache);
+            Self::add_read(key.clone(), read, ctx.revertable_ordered_reads, ctx.cache);
             Ok(storage_value)
         }
     }
@@ -660,8 +669,10 @@ impl<N: ProvableCompileTimeNamespace> ProvableStorageCache<N> {
         metric: &mut StateAccessMetric,
     ) -> anyhow::Result<Option<SlotValue>> {
         Self::get_or_fetch_with_fn(
-            &mut self.cache,
-            &mut self.revertable_ordered_reads,
+            &mut GetOrFetchCacheContext {
+                cache: &mut self.cache,
+                revertable_ordered_reads: &mut self.revertable_ordered_reads,
+            },
             key,
             storage,
             witness,

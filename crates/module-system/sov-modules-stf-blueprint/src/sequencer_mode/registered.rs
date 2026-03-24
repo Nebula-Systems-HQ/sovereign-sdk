@@ -1,7 +1,7 @@
 use sov_metrics::{AuthAndProcessMetrics, AuthAndProcessTimings};
 use sov_modules_api::capabilities::{
-    AuthenticationError, ChainState, GasEnforcer, SequencerAuthorization, TransactionAuthenticator,
-    TransactionAuthorizer,
+    AuthenticationError, ChainState, GasEnforcer, ResolveContextParams, SequencerAuthorization,
+    TransactionAuthenticator, TransactionAuthorizer,
 };
 use sov_modules_api::transaction::TransactionConsumption;
 use sov_modules_api::{
@@ -83,8 +83,10 @@ where
     #[cfg(feature = "native")]
     track_transaction_metrics(
         &result.0,
-        start.elapsed(),
-        execution_context,
+        TransactionTiming {
+            execution_time: start.elapsed(),
+            execution_context,
+        },
         visible_slot_number,
         sequencer_da_address,
         discriminant,
@@ -96,10 +98,15 @@ where
 }
 
 #[cfg(feature = "native")]
-fn track_transaction_metrics<S: Spec>(
-    result: &Result<ApplyTxResult<S>, TxAndError>,
+struct TransactionTiming {
     execution_time: std::time::Duration,
     execution_context: ExecutionContext,
+}
+
+#[cfg(feature = "native")]
+fn track_transaction_metrics<S: Spec>(
+    result: &Result<ApplyTxResult<S>, TxAndError>,
+    timing: TransactionTiming,
     visible_slot_number: sov_rollup_interface::common::VisibleSlotNumber,
     sequencer_address: &<S::Da as DaSpec>::Address,
     message_discriminant: String,
@@ -132,9 +139,9 @@ fn track_transaction_metrics<S: Spec>(
         let gas_used = basic_gas_meter.gas_info().gas_used;
 
         let transaction_metrics = sov_metrics::TransactionProcessingMetrics {
-            execution_time,
+            execution_time: timing.execution_time,
             tx_effect,
-            execution_context: execution_context.str(),
+            execution_context: timing.execution_context.str(),
             visible_slot_number: visible_slot_number.get(),
             sequencer_address: sequencer_address.to_string(),
             call_message: message_discriminant,
@@ -188,8 +195,10 @@ where
         sequencer_da_address,
         sequencer_rollup_address,
         &mut pre_exec_working_set,
-        raw_tx.sequencing_data.clone(),
-        *execution_context,
+        ResolveContextParams {
+            sequencing_data: raw_tx.sequencing_data.clone(),
+            execution_context: *execution_context,
+        },
         sequencer_type,
     );
     metrics.timings.resolve_context_timer.end();

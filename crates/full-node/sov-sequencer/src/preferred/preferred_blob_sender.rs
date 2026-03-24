@@ -1,7 +1,8 @@
 use sov_blob_sender::BlobExecutionStatus;
 use sov_blob_sender::{BlobInternalId, BlobSender, BlobToSend};
-use sov_blob_storage::{PreferredBatchData, PreferredProofData};
+use sov_blob_storage::{EncryptedPreferredBatchData, PreferredBatchData, PreferredProofData};
 use sov_db::ledger_db::LedgerDb;
+use sov_encryption::EncryptionLayer;
 use sov_modules_api::TxHash;
 use sov_rollup_interface::node::da::DaService;
 use std::{
@@ -22,9 +23,11 @@ use crate::{common::TxStatusBlobSenderHooks, TxStatusManager};
 pub struct PreferredBlobSender<Da: DaService> {
     inner: Option<BlobSender<Da, TxStatusBlobSenderHooks<Da::Spec>, LedgerDb>>,
     nb_of_concurrent_blob_submissions: Arc<AtomicUsize>,
+    encryption_layer: Option<EncryptionLayer>,
 }
 
 impl<Da: DaService> PreferredBlobSender<Da> {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn new(
         da: Da,
         ledger_db: LedgerDb,
@@ -35,6 +38,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
         blob_processing_timeout: Duration,
         blobs_sender_channel: broadcast::Sender<BlobExecutionStatus<Da::Spec>>,
         seq_role: SequencerRole,
+        shared_encryption_layer: Option<EncryptionLayer>,
     ) -> anyhow::Result<(Self, Option<JoinHandle<()>>)> {
         let nb_of_concurrent_blob_submissions = Arc::new(AtomicUsize::new(0));
         match seq_role {
@@ -42,6 +46,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
                 Self {
                     inner: None,
                     nb_of_concurrent_blob_submissions,
+                    encryption_layer: shared_encryption_layer,
                 },
                 None,
             )),
@@ -52,7 +57,8 @@ impl<Da: DaService> PreferredBlobSender<Da> {
                 //  2. DB corruption.
                 //  3. Node crash at an inconvenient time.
                 // Let's restore all missing blob data to make sure they land on the DA.
-                let blobs_to_send = create_blobs_to_send(all_completed_blobs)?;
+                let blobs_to_send =
+                    create_blobs_to_send(all_completed_blobs, shared_encryption_layer.as_ref())?;
                 let (inner, blob_sender_handle) = BlobSender::new(
                     da.clone(),
                     ledger_db,
@@ -70,6 +76,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
                     Self {
                         inner: Some(inner),
                         nb_of_concurrent_blob_submissions,
+                        encryption_layer: shared_encryption_layer,
                     },
                     Some(blob_sender_handle),
                 ))
@@ -105,7 +112,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
         };
 
         let blob_id = batch.blob_id;
-        let data = batch_bytes(batch)?;
+        let data = batch_bytes(batch, self.encryption_layer.as_ref())?;
 
         inner.publish_batch_blob(data, blob_id).await?;
 
@@ -148,6 +155,7 @@ impl<Da: DaService> PreferredBlobSender<Da> {
 
 pub fn create_blobs_to_send(
     completed_blobs: Vec<ReadBlob>,
+    encryption_layer: Option<&EncryptionLayer>,
 ) -> anyhow::Result<Vec<(BlobToSend, BlobInternalId)>> {
     let mut blobs_to_send = Vec::new();
 
@@ -155,7 +163,7 @@ pub fn create_blobs_to_send(
         match blob {
             ReadBlob::Batch(batch) => {
                 let blob_id = batch.blob_id;
-                let data = batch_bytes(batch)?;
+                let data = batch_bytes(batch, encryption_layer)?;
                 blobs_to_send.push((BlobToSend::Batch { data }, blob_id));
             }
             ReadBlob::Proof {
@@ -185,11 +193,53 @@ fn proof_bytes(proof_data: &[u8], sequence_number: u64) -> anyhow::Result<Arc<[u
     Ok(Arc::from(borsh::to_vec(&blob)?))
 }
 
-fn batch_bytes(batch: ReadBatch) -> anyhow::Result<Arc<[u8]>> {
-    Ok(borsh::to_vec::<PreferredBatchData>(&PreferredBatchData {
-        sequence_number: batch.sequence_number,
-        visible_slots_to_advance: batch.visible_slots_to_advance,
-        data: batch.txs,
-    })?
-    .into())
+fn batch_bytes(
+    batch: ReadBatch,
+    encryption_layer: Option<&EncryptionLayer>,
+) -> anyhow::Result<Arc<[u8]>> {
+    if let Some(encryptor) = encryption_layer {
+        // Use the visible slot number from the batch for encryption context
+        let slot_number = batch.visible_slot_number_after_increase.as_true().get();
+        tracing::debug!(
+            "📦 SEQUENCER: Encrypting batch #{} with {} transactions at slot {}",
+            batch.sequence_number,
+            batch.txs.len(),
+            slot_number
+        );
+
+        // Serialize the entire transaction vector
+        let txs_serialized = borsh::to_vec(&*batch.txs)?;
+
+        // Encrypt using the encryption layer's built-in fallback logic
+        let (encrypted_txs_data, encryption_key_id) =
+            encryptor.encrypt_for_slot(slot_number, &txs_serialized)?;
+
+        // Create batch with serialized encrypted blob + metadata including key ID
+        tracing::debug!(
+            "📦 SEQUENCER: Creating encrypted batch #{} with encryption_key_id='{}'",
+            batch.sequence_number,
+            encryption_key_id
+        );
+
+        Ok(
+            borsh::to_vec::<EncryptedPreferredBatchData>(&EncryptedPreferredBatchData {
+                sequence_number: batch.sequence_number,
+                visible_slots_to_advance: batch.visible_slots_to_advance,
+                encrypted_txs_data,
+                tx_hashes: batch.tx_hashes,
+                encryption_key_id,
+            })?
+            .into(),
+        )
+    } else {
+        // Original unencrypted path if encryption is not enabled
+        tracing::debug!("📦 Creating batch with unencrypted txs");
+
+        Ok(borsh::to_vec::<PreferredBatchData>(&PreferredBatchData {
+            sequence_number: batch.sequence_number,
+            visible_slots_to_advance: batch.visible_slots_to_advance,
+            data: batch.txs,
+        })?
+        .into())
+    }
 }

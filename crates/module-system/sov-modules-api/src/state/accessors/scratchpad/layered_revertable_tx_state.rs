@@ -395,7 +395,17 @@ impl<S: Spec, I: TxState<S>> ProvableStateWriter<KernelType>
 {
 }
 impl<S: Spec, I: TxState<S>> AccessoryStateWriter for LayeredRevertableTxState<'_, S, I> {}
+impl<S: Spec, I: TxState<S>> crate::state::traits::PinnedCacheAccessor<S>
+    for LayeredRevertableTxState<'_, S, I>
+{
+    fn pinned_cache_mut(&mut self) -> Option<&mut sov_state::pinned_cache::PinnedCache> {
+        self.inner.pinned_cache_mut()
+    }
 
+    fn storage(&self) -> &S::Storage {
+        self.inner.storage()
+    }
+}
 // Note: `LayeredRevertableTxState` implements `TxState<S>` via the blanket implementation.
 // The direct method `add_revertable_layer()` returns `&mut Self` and uses the vector-based
 // approach to prevent unbounded recursion.

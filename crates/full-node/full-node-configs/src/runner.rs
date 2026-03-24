@@ -131,6 +131,14 @@ pub struct ProofManagerConfig<Address> {
     pub max_number_of_transitions_in_memory: NonZero<u64>,
 }
 
+/// STF configuration.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub struct StfConfig {
+    /// Optional encryption configuration for decrypting batch data from the DA layer
+    #[serde(default)]
+    pub encryption: Option<sov_encryption::KeyClientConfig>,
+}
+
 /// Rollup Configuration
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[schemars(
@@ -149,6 +157,9 @@ pub struct RollupConfig<Address: Copy, Da: DaService, M> {
     pub proof_manager: ProofManagerConfig<Address>,
     /// Sequencer (and batch builder) configuration.
     pub sequencer: SequencerConfig<Address, SequencerKindConfig<Address>>,
+    /// STF configuration.
+    #[serde(default)]
+    pub stf: StfConfig,
     /// Monitoring configuration.
     pub monitoring: M,
 }

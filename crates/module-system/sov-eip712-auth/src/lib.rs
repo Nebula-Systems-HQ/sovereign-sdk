@@ -90,25 +90,33 @@ where
     type Decodable = Rt::Decodable;
     type Input = Eip712AuthenticatorInput;
 
-    #[cfg(feature = "native")]
     fn decode_serialized_tx(
         tx: &FullyBakedTx,
     ) -> Result<Self::Decodable, sov_modules_api::capabilities::FatalError> {
-        let auth_variant: Eip712AuthenticatorInput = borsh::from_slice(&tx.data).map_err(|e| {
-            sov_modules_api::capabilities::FatalError::DeserializationFailed(e.to_string())
-        })?;
+        #[cfg(feature = "native")]
+        {
+            let auth_variant: Eip712AuthenticatorInput =
+                borsh::from_slice(&tx.data).map_err(|e| {
+                    sov_modules_api::capabilities::FatalError::DeserializationFailed(e.to_string())
+                })?;
 
-        match auth_variant {
-            Eip712AuthenticatorInput::Standard(raw_tx) => {
-                sov_modules_api::capabilities::decode_sov_tx::<S, Rt>(&raw_tx.data)
+            match auth_variant {
+                Eip712AuthenticatorInput::Standard(raw_tx) => {
+                    sov_modules_api::capabilities::decode_sov_tx::<S, Rt>(&raw_tx.data)
+                }
+                Eip712AuthenticatorInput::Eip712(raw_tx) => {
+                    sov_modules_api::capabilities::decode_sov_tx_with_cryptospec::<
+                        S,
+                        Rt,
+                        <<S as Spec>::CryptoSpec as Secp256k1CryptoSpec>::CryptoSpec,
+                    >(&raw_tx.data)
+                }
             }
-            Eip712AuthenticatorInput::Eip712(raw_tx) => {
-                sov_modules_api::capabilities::decode_sov_tx_with_cryptospec::<
-                    S,
-                    Rt,
-                    <<S as Spec>::CryptoSpec as Secp256k1CryptoSpec>::CryptoSpec,
-                >(&raw_tx.data)
-            }
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = tx;
+            unreachable!("decode_serialized_tx is only called with the native feature")
         }
     }
 
@@ -137,18 +145,25 @@ where
         }
     }
 
-    #[cfg(feature = "native")]
     fn compute_tx_hash(
         tx: &sov_modules_api::FullyBakedTx,
     ) -> anyhow::Result<sov_modules_api::TxHash> {
-        let input: Eip712AuthenticatorInput = borsh::from_slice(&tx.data)?;
+        #[cfg(feature = "native")]
+        {
+            let input: Eip712AuthenticatorInput = borsh::from_slice(&tx.data)?;
 
-        // Here we intentionally use S::CryptoSpec for hashing, as transaction hashes don't need to
-        // use the Secp256k1CryptoSpec
-        match input {
-            Eip712AuthenticatorInput::Eip712(tx) | Eip712AuthenticatorInput::Standard(tx) => {
-                Ok(sov_modules_api::capabilities::calculate_hash::<S>(&tx.data))
+            // Here we intentionally use S::CryptoSpec for hashing, as transaction hashes don't need to
+            // use the Secp256k1CryptoSpec
+            match input {
+                Eip712AuthenticatorInput::Eip712(tx) | Eip712AuthenticatorInput::Standard(tx) => {
+                    Ok(sov_modules_api::capabilities::calculate_hash::<S>(&tx.data))
+                }
             }
+        }
+        #[cfg(not(feature = "native"))]
+        {
+            let _ = tx;
+            unreachable!("compute_tx_hash is only called with the native feature")
         }
     }
 

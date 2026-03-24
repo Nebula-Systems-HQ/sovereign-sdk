@@ -30,6 +30,7 @@ members = [
     "crates/utils/sov-build",
     "crates/utils/sov-rpc-eth-types",
     "crates/utils/sov-evm-soak-testing",
+    "crates/utils/sov-encryption",
     "crates/utils/sov-test-utils",
     "crates/utils/sov-evm-test-utils",
     "crates/utils/sov-proxy-utils",
@@ -159,7 +160,7 @@ sov-eth-dev-signer = { path = "crates/full-node/sov-eth-dev-signer", default-fea
 sov-eth-dev-generator = { path = "crates/full-node/sov-eth-dev-generator", default-features = false, version = "0.3" }
 sov-modules-api = { path = "crates/module-system/sov-modules-api", default-features = false, version = "0.3" }
 sov-solana-offchain-auth = { path = "crates/module-system/sov-solana-offchain-auth", default-features = false, version = "0.3" }
-sov-eip712-auth = { path = "crates/module-system/sov-eip712-auth", default-features = false, version = "0.3" }
+sov-eip712-auth = { path = "crates/module-system/sov-eip712-auth", default-features = false, features = ["native"], version = "0.3" }
 sov-uniqueness = { path = "crates/module-system/module-implementations/sov-uniqueness", default-features = false, version = "0.3" }
 sov-paymaster = { path = "crates/module-system/module-implementations/sov-paymaster", default-features = false, version = "0.3" }
 sov-rollup-interface = { path = "crates/rollup-interface", default-features = false, version = "0.3" }
@@ -172,6 +173,7 @@ sov-kernels = { path = "crates/module-system/sov-kernels", default-features = fa
 sov-state = { path = "crates/module-system/sov-state", default-features = false, version = "0.3" }
 sov-address = { path = "crates/module-system/sov-address", default-features = false, version = "0.3" }
 sov-rest-utils = { path = "crates/utils/sov-rest-utils", default-features = false, version = "0.3" }
+sov-encryption = { path = "crates/utils/sov-encryption" }
 sov-transaction-generator = { path = "crates/utils/transaction-generator", default-features = false, version = "0.3" }
 sov-metrics = { path = "crates/full-node/sov-metrics", default-features = false, version = "0.3" }
 sov-cli = { path = "crates/module-system/sov-cli", default-features = false, version = "0.3" }

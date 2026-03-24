@@ -378,7 +378,9 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
                 max_concurrent_blobs: self.config.max_concurrent_blobs,
                 blob_processing_timeout_secs: self.config.blob_processing_timeout_secs,
                 extension: self.config.extension,
+                batch_encryption: None,
             },
+            stf: Default::default(),
 
             monitoring: MonitoringConfig {
                 telegraf_address: self.config.telegraf_address,

@@ -52,6 +52,17 @@
         }
       ]
     },
+    "stf": {
+      "description": "STF configuration.",
+      "default": {
+        "encryption": null
+      },
+      "allOf": [
+        {
+          "$ref": "#/definitions/StfConfig"
+        }
+      ]
+    },
     "storage": {
       "description": "Currently rollup config runner only supports storage path parameter",
       "allOf": [
@@ -343,6 +354,78 @@
           ]
         }
       }
+    },
+    "KeyClientConfig": {
+      "oneOf": [
+        {
+          "description": "Static key configuration (no external fetching).\n\nCurrently supports symmetric AES-256-GCM only. For future asymmetric encryption support (HPKE with Kyber KEM for forced inclusion transactions), an algorithm type will be added to InternalKey and keys will be delivered via the Unix socket key service with type metadata. See PR2_REVIEW_PLAN.md \"Asymmetric Encryption Roadmap\".",
+          "type": "object",
+          "required": [
+            "encryption_key",
+            "type"
+          ],
+          "properties": {
+            "encryption_key": {
+              "description": "Hex-encoded AES-256-GCM encryption key (must be exactly 32 bytes / 64 hex chars)",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "static"
+              ]
+            }
+          }
+        },
+        {
+          "description": "Unix socket key client",
+          "type": "object",
+          "required": [
+            "socket_path",
+            "type"
+          ],
+          "properties": {
+            "initial_key": {
+              "description": "Optional initial key to start with (hex-encoded)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "max_retries": {
+              "description": "Maximum number of retry attempts",
+              "default": 3,
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0.0
+            },
+            "retry_delay_ms": {
+              "description": "Retry backoff base delay (in milliseconds)",
+              "default": 1000,
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "socket_path": {
+              "description": "Path to the Unix socket",
+              "type": "string"
+            },
+            "timeout": {
+              "description": "Timeout for key server requests (in seconds)",
+              "default": 30,
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0.0
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "unix_socket"
+              ]
+            }
+          }
+        }
+      ]
     },
     "LeaderElectionConfig": {
       "description": "Configuration for leader election timing.",
@@ -1120,7 +1203,7 @@
       ],
       "properties": {
         "admin_addresses": {
-          "description": "The list of addresses that are allowed to perform admin operations on the sequencer.",
+          "description": "The list of addresses that are allowed to perform admin operations on the sequencer. The custom \"default\" is equivalent to Serde's default default, but without the bound `Address: Default`.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/Address"
@@ -1130,6 +1213,18 @@
           "description": "When enabled, submitted transactions are periodically assembled into batches and automatically posted to the DA layer. When disabled, the batch production endpoint has to be called explicitly.",
           "default": true,
           "type": "boolean"
+        },
+        "batch_encryption": {
+          "description": "Optional batch encryption configuration. When provided, serialized transaction batches will be encrypted before being submitted to the DA layer.",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/KeyClientConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "blob_processing_timeout_secs": {
           "description": "Maximum time in seconds to wait for a blob to be processed, since it has been published to DA.",
@@ -1273,6 +1368,24 @@
         }
       },
       "additionalProperties": false
+    },
+    "StfConfig": {
+      "description": "STF configuration.",
+      "type": "object",
+      "properties": {
+        "encryption": {
+          "description": "Optional encryption configuration for decrypting batch data from the DA layer",
+          "default": null,
+          "anyOf": [
+            {
+              "$ref": "#/definitions/KeyClientConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
     },
     "TelegrafSocketConfig": {
       "description": "Config of receiving `inputs.socket_listener` <https://www.influxdata.com/blog/telegraf-socket-listener-input-plugin/>",

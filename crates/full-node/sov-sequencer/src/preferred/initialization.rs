@@ -4,6 +4,7 @@ use crate::preferred::db::SequencerRole;
 use anyhow::Context;
 use anyhow::Result;
 use sov_db::ledger_db::LedgerDb;
+use sov_encryption::EncryptionLayer;
 use sov_modules_api::rest::StateUpdateReceiver;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -45,6 +46,7 @@ where
     }
 
     /// Builds the sequencer instance.
+    #[allow(clippy::too_many_arguments)]
     pub async fn build(
         self,
         state_update_receiver: StateUpdateReceiver<S::Storage>,
@@ -53,6 +55,7 @@ where
         api_ledger_db: LedgerDb,
         shutdown_sender: watch::Sender<()>,
         stop_at_rollup_height: Option<RollupHeight>,
+        shared_encryption_layer: Option<EncryptionLayer>,
         bind_addr: SocketAddr,
     ) -> Result<(PreferredSequencer<S, Rt, Da>, Vec<JoinHandle<()>>)> {
         let shutdown_receiver = shutdown_sender.subscribe();
@@ -100,6 +103,7 @@ where
             Duration::from_secs(config.blob_processing_timeout_secs),
             blobs_sender_channel.clone(),
             seq_role,
+            shared_encryption_layer,
         )
         .await?;
 

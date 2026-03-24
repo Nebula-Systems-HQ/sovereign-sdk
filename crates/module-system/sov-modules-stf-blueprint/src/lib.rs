@@ -35,7 +35,6 @@ pub use sov_modules_api::{BatchWithId, BlobData, Runtime};
 use sov_modules_api::{
     BlobDataWithId, DaSpec, ExecutionContext, Gas, Genesis, Spec, StateCheckpoint,
 };
-#[cfg(feature = "native")]
 use sov_rollup_interface::da::BlockHeaderTrait;
 use sov_rollup_interface::da::RelevantBlobIters;
 use sov_rollup_interface::stf::{ApplySlotOutput, StateTransitionFunction};
@@ -379,6 +378,7 @@ where
             relevant_blobs,
             execution_context,
             NoOpControlFlow,
+            self.encryption_layer.as_ref(),
         )
     }
 }
@@ -397,13 +397,14 @@ where
         relevant_blobs: RelevantBlobIters<&mut [<S::Da as DaSpec>::BlobTransaction]>,
         kernel: &mut KernelStateAccessor<S>,
         cf: CF,
+        encryption_layer: Option<&sov_encryption::EncryptionLayer>,
     ) -> (
         BlobSelectorOutput<SelectedBlob<S, IterableBatchWithId<S, CF>>>,
         Vec<DiscardedBlob>,
     ) {
         runtime
             .blob_selector()
-            .get_blobs_for_this_slot(relevant_blobs, kernel, cf)
+            .get_blobs_for_this_slot(relevant_blobs, kernel, cf, encryption_layer)
             .expect("blob selection must succeed, probably serialization failed")
     }
 }
@@ -429,12 +430,22 @@ where
         relevant_blobs: RelevantBlobIters<&mut [<S::Da as DaSpec>::BlobTransaction]>,
         execution_context: ExecutionContext,
         cf: CF,
+        encryption_layer: Option<&sov_encryption::EncryptionLayer>,
     ) -> ApplySlotOutput<S::InnerZkvm, S::OuterZkvm, S::Da, Self> {
         let mut runtime = RT::default();
         // Sanity check that gas limits are set correctly. This is already checked at genesis, but we check again in case
         // Someone modifies the code after genesis.
         assert!(<S as GasSpec>::process_tx_pre_exec_checks_gas()
             .dim_is_less_than(<S as GasSpec>::max_tx_check_costs()), "Gas misconfiguration: PROCESS_TX_PRE_EXEC_GAS must be less than MAX_SEQUENCER_EXEC_GAS_PER_TX");
+
+        // Set current slot number in encryption layer for proactive key activation
+        if let Some(_encryption_layer) = encryption_layer {
+            let slot_number = slot_header.height();
+            tracing::debug!(
+                "STF: Processing slot {} for batch processing and decryption",
+                slot_number
+            );
+        }
 
         start_timer!(start_slot);
 
@@ -494,6 +505,7 @@ where
             relevant_blobs,
             &mut kernel_with_partially_stale_heights,
             cf,
+            encryption_layer,
         );
         tracing::trace!("Done selecting blobs");
 

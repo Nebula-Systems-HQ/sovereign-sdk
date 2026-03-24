@@ -106,7 +106,7 @@ impl<Rt: Runtime<TestSpec>> TestSequencerSetup<Rt> {
             runtime: genesis_config,
         };
 
-        let stf = TestStfBlueprint::with_runtime(runtime);
+        let stf = TestStfBlueprint::with_runtime(runtime, None);
 
         let genesis_block = MockBlock::default();
         let (stf_state, _ledger_state) =
@@ -154,6 +154,7 @@ impl<Rt: Runtime<TestSpec>> TestSequencerSetup<Rt> {
             max_concurrent_blobs: TEST_MAX_CONCURRENT_BLOBS,
             blob_processing_timeout_secs: 60,
             extension: None,
+            batch_encryption: None,
         };
 
         let (sequencer, _) = StdSequencer::<TestSpec, Rt, StorableMockDaService>::create(

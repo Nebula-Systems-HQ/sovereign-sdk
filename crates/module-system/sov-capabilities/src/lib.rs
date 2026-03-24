@@ -8,8 +8,8 @@ use sov_chain_state::ChainState as ChainStateModule;
 #[cfg(feature = "native")]
 use sov_modules_api::capabilities::HasKernel;
 use sov_modules_api::capabilities::{
-    AuthorizationData, GasEnforcer, ProofProcessor, SequencerAuthorization, SequencerRemuneration,
-    SequencingDataHandler, TransactionAuthorizer,
+    AuthorizationData, GasEnforcer, ProofProcessor, ResolveContextParams, SequencerAuthorization,
+    SequencerRemuneration, SequencingDataHandler, TransactionAuthorizer,
 };
 use sov_modules_api::transaction::{
     AuthenticatedTransactionData, ProverReward, RemainingFunds, SequencerReward,
@@ -24,7 +24,6 @@ use sov_modules_api::{
 };
 use sov_rollup_interface::common::SlotNumber;
 use sov_rollup_interface::zk::aggregated_proof::SerializedAggregatedProof;
-use sov_rollup_interface::Bytes;
 #[cfg(feature = "native")]
 use sov_rollup_interface::StateUpdateInfo;
 use sov_sequencer_registry::SequencerRegistry;
@@ -288,8 +287,7 @@ impl<S: Spec, T> TransactionAuthorizer<S> for StandardProvenRollupCapabilities<'
         sequencer: &<S::Da as DaSpec>::Address,
         sequencer_rollup_address: S::Address,
         state: &mut impl StateAccessor,
-        sequencing_data: Option<Bytes>,
-        execution_context: ExecutionContext,
+        params: ResolveContextParams,
         sequencer_type: SequencerType,
     ) -> anyhow::Result<Context<S>> {
         // This should be resolved by the sequencer registry during blob selection
@@ -303,8 +301,8 @@ impl<S: Spec, T> TransactionAuthorizer<S> for StandardProvenRollupCapabilities<'
             auth_data.credentials.clone(),
             sequencer_rollup_address,
             *sequencer,
-            sequencing_data,
-            execution_context,
+            params.sequencing_data,
+            params.execution_context,
             sequencer_type,
         ))
     }

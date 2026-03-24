@@ -20,9 +20,10 @@ use tracing::{debug, info, trace, warn};
 
 use crate::max_size_checker::{BlobsAccumulatorWithSizeLimit, PushOrIgnore};
 use crate::{
-    config_deferred_slots_count, config_unregistered_blobs_per_slot, BlobStorage, BlobType, Escrow,
-    PreferredBatchData, PreferredBlobData, PreferredBlobDataWithId, PreferredProofData,
-    SequenceNumber, SequencerNumberTracker, SequencerType, ValidatedBlob,
+    config_deferred_slots_count, config_unregistered_blobs_per_slot, BlobStorage, BlobType,
+    EncryptedPreferredBatchData, Escrow, PreferredBatchData, PreferredBlobData,
+    PreferredBlobDataWithId, PreferredProofData, SequenceNumber, SequencerNumberTracker,
+    SequencerType, ValidatedBlob,
 };
 /// A loose upper bound on the size of an emergency registration blob, in bytes. Blobs larger than this are statically known to be invalid
 /// so we don't bother trying to deserialize them.
@@ -59,7 +60,7 @@ impl PreferredBlobData {
     fn blob_type(&self) -> BlobType {
         match self {
             PreferredBlobData::Proof(_) => BlobType::Proof,
-            PreferredBlobData::Batch(_) => BlobType::Batch,
+            PreferredBlobData::Batch(_) | PreferredBlobData::EncryptedBatch(_) => BlobType::Batch,
         }
     }
 }
@@ -430,6 +431,7 @@ impl<S: Spec> BlobStorage<S> {
     /// For batches, we select
     /// - The next one sent by the preferred sequencer (if available)
     /// - Any batches which appeared on chain before or during the current *visible* slot number
+    #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(skip_all)]
     fn select_blobs_for_preferred_sequencer<'k, CF: InjectedControlFlow<S> + Clone>(
         &mut self,
@@ -439,6 +441,7 @@ impl<S: Spec> BlobStorage<S> {
         preferred_sender: &<S::Da as DaSpec>::Address,
         preferred_sequencer: S::Address,
         cf: CF,
+        encryption_layer: Option<&sov_encryption::EncryptionLayer>,
     ) -> BlobSelectorOutput<SelectedBlob<S, IterableBatchWithId<S, CF>>> {
         let mut sequence_tracker = self
             .upcoming_sequence_numbers
@@ -471,14 +474,14 @@ impl<S: Spec> BlobStorage<S> {
                         inner: PreferredBlobData::Proof(proof),
                         id: proof_blob.hash().into(),
                     }),
-                BlobOrigin::Batch(batch_blob) => self
-                    .deserialize_or_try_slash_sender::<PreferredBatchData>(
-                        batch_blob, None, true, state,
-                    )
-                    .map(|batch| PreferredBlobDataWithId {
-                        inner: PreferredBlobData::Batch(batch),
-                        id: batch_blob.hash().into(),
-                    }),
+                BlobOrigin::Batch(batch_blob) => {
+                    // Process batch from blob (handles both encrypted and unencrypted)
+                    self.process_batch_from_blob(batch_blob, None, state, encryption_layer)
+                        .map(|batch| PreferredBlobDataWithId {
+                            inner: PreferredBlobData::Batch(batch),
+                            id: batch_blob.hash().into(),
+                        })
+                }
             })
             .collect::<Vec<_>>();
 
@@ -817,7 +820,6 @@ impl<S: Spec> BlobStorage<S> {
         discarded_blobs: &mut Vec<DiscardedBlob>,
         preferred_sender: &<S::Da as DaSpec>::Address,
         preferred_sequencer: &S::Address,
-
         visible_height_increase: u64,
         state: &mut KernelStateAccessor<'_, S>,
     ) {
@@ -826,6 +828,11 @@ impl<S: Spec> BlobStorage<S> {
             let data = match blob.inner {
                 PreferredBlobData::Batch(batch) => {
                     BlobData::Batch((batch.data, *preferred_sequencer))
+                }
+                PreferredBlobData::EncryptedBatch(_) => {
+                    // The EncryptedBatch variant exists on the enum for Borsh serialization
+                    // of the deferred blob storage map, but only Batch/Proof are ever stored.
+                    unreachable!("EncryptedBatch should not reach add_preferred_blobs_to_selection")
                 }
                 PreferredBlobData::Proof(proof) => {
                     BlobData::Proof((proof.data, *preferred_sequencer))
@@ -1056,7 +1063,9 @@ impl<S: Spec> BlobStorage<S> {
                 state,
             ).expect("Failed to remove funds for deserialization even though the sender has enough balance. This should never happen.");
         }
-        match B::try_from_slice(data_for_deserialization(blob)) {
+        let data_to_deserialize = data_for_deserialization(blob);
+
+        match B::try_from_slice(data_to_deserialize) {
             Ok(batch) => Some(batch),
             // if the blob is malformed, slash the sequencer
             Err(e) => {
@@ -1086,6 +1095,122 @@ impl<S: Spec> BlobStorage<S> {
             }
         }
     }
+
+    /// Process a batch blob into PreferredBatchData.
+    /// Routes to decryption or direct deserialization based on rollup configuration.
+    fn process_batch_from_blob(
+        &mut self,
+        blob: &mut <S::Da as DaSpec>::BlobTransaction,
+        charge_for_deserialization: Option<(&AllowedSequencer<S>, &<S::Gas as Gas>::Price)>,
+        state: &mut KernelStateAccessor<'_, S>,
+        encryption_layer: Option<&sov_encryption::EncryptionLayer>,
+    ) -> Option<PreferredBatchData> {
+        match encryption_layer {
+            Some(encryption) => {
+                // Rollup is configured for encryption - decrypt then deserialize
+                self.decrypt_and_deserialize_batch(
+                    blob,
+                    charge_for_deserialization,
+                    state,
+                    encryption,
+                )
+            }
+            None => {
+                // Rollup is configured for no encryption - all batches must be unencrypted
+                tracing::debug!(
+                    "STF: Deserializing unencrypted batch from blob {}",
+                    blob.hash()
+                );
+
+                self.deserialize_or_try_slash_sender::<PreferredBatchData>(
+                    blob,
+                    charge_for_deserialization.map(|(seq, price)| (seq, *price)),
+                    true,
+                    state,
+                )
+            }
+        }
+    }
+
+    /// Decrypt and deserialize an encrypted batch blob.
+    fn decrypt_and_deserialize_batch(
+        &mut self,
+        blob: &mut <S::Da as DaSpec>::BlobTransaction,
+        charge_for_deserialization: Option<(&AllowedSequencer<S>, &<S::Gas as Gas>::Price)>,
+        state: &mut KernelStateAccessor<'_, S>,
+        encryption_layer: &sov_encryption::EncryptionLayer,
+    ) -> Option<PreferredBatchData> {
+        // Deserialize the encrypted batch metadata
+        let encrypted_batch = self.deserialize_or_try_slash_sender::<EncryptedPreferredBatchData>(
+            blob,
+            charge_for_deserialization.map(|(seq, price)| (seq, *price)),
+            true,
+            state,
+        )?;
+
+        tracing::debug!(
+            "STF: Decrypting batch #{} with key '{}'",
+            encrypted_batch.sequence_number,
+            encrypted_batch.encryption_key_id
+        );
+
+        // Decrypt the transaction data using the specific key ID
+        // Old keys are automatically pruned after decryption
+        let decrypted_txs_bytes = match encryption_layer.decrypt_with_key_id(
+            &encrypted_batch.encryption_key_id,
+            &encrypted_batch.encrypted_txs_data,
+        ) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::error!(
+                    "STF: Failed to decrypt batch #{} with key '{}': {}. \
+                    Skipping batch — encryption key may not be available or data is corrupted.",
+                    encrypted_batch.sequence_number,
+                    encrypted_batch.encryption_key_id,
+                    e
+                );
+                return None;
+            }
+        };
+
+        // Deserialize the decrypted transactions
+        let txs = self.deserialize_transaction_data(&decrypted_txs_bytes, &encrypted_batch)?;
+
+        tracing::debug!(
+            "STF: Decrypted batch #{} with {} transactions using key '{}'",
+            encrypted_batch.sequence_number,
+            txs.len(),
+            encrypted_batch.encryption_key_id
+        );
+
+        Some(PreferredBatchData {
+            sequence_number: encrypted_batch.sequence_number,
+            data: txs,
+            visible_slots_to_advance: encrypted_batch.visible_slots_to_advance,
+        })
+    }
+
+    /// Deserialize transaction data from decrypted bytes.
+    fn deserialize_transaction_data(
+        &self,
+        decrypted_txs_bytes: &[u8],
+        encrypted_batch: &EncryptedPreferredBatchData,
+    ) -> Option<std::sync::Arc<Vec<sov_modules_api::FullyBakedTx>>> {
+        match borsh::from_slice::<std::sync::Arc<Vec<sov_modules_api::FullyBakedTx>>>(
+            decrypted_txs_bytes,
+        ) {
+            Ok(txs) => Some(txs),
+            Err(e) => {
+                tracing::error!(
+                    "❌ STF: Failed to deserialize decrypted transactions for batch #{} key '{}': {}",
+                    encrypted_batch.sequence_number,
+                    encrypted_batch.encryption_key_id,
+                    e
+                );
+                None
+            }
+        }
+    }
 }
 
 // The public API of the BlobStorage module.
@@ -1100,6 +1225,7 @@ impl<S: Spec> BlobStorage<S> {
         current_blobs: RelevantBlobIters<&mut [<S::Da as DaSpec>::BlobTransaction]>,
         state: &mut KernelStateAccessor<'_, S>,
         cf: CF,
+        encryption_layer: Option<&sov_encryption::EncryptionLayer>,
     ) -> anyhow::Result<(
         BlobSelectorOutput<SelectedBlob<S, IterableBatchWithId<S, CF>>>,
         Vec<DiscardedBlob>,
@@ -1138,6 +1264,7 @@ impl<S: Spec> BlobStorage<S> {
                     &pref_da,
                     pref_seq,
                     cf,
+                    encryption_layer,
                 ),
                 discarded_blobs,
             ));

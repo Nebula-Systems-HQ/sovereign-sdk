@@ -59,8 +59,8 @@ pub struct SequencerConfig<Address: Copy, Sc = SequencerKindConfig<Address>> {
     pub rollup_address: Address,
     /// The list of addresses that are allowed to perform admin operations on
     /// the sequencer.
-    // The custom "default" is equivalent to Serde's default default, but
-    // without the bound `Address: Default`.
+    /// The custom "default" is equivalent to Serde's default default, but
+    /// without the bound `Address: Default`.
     #[serde(default = "Vec::<Address>::new")]
     pub admin_addresses: Vec<Address>,
     /// Sequencer-type specific configuration.
@@ -74,6 +74,10 @@ pub struct SequencerConfig<Address: Copy, Sc = SequencerKindConfig<Address>> {
     pub blob_processing_timeout_secs: u64,
     /// Extensions to the sequencer config (for example evm related configuration).
     pub extension: Option<SeqConfigExtension>,
+    /// Optional batch encryption configuration. When provided, serialized
+    /// transaction batches will be encrypted before being submitted to the DA layer.
+    #[serde(default)]
+    pub batch_encryption: Option<sov_encryption::KeyClientConfig>,
 }
 
 fn default_automatic_batch_production() -> bool {
@@ -94,6 +98,7 @@ impl<Addr: Copy + Clone, BbConfig> SequencerConfig<Addr, BbConfig> {
             sequencer_kind_config: seq_config,
             blob_processing_timeout_secs: self.blob_processing_timeout_secs,
             extension: self.extension,
+            batch_encryption: self.batch_encryption.clone(),
         }
     }
 }

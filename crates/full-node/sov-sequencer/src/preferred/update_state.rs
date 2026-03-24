@@ -292,6 +292,7 @@ fn validate_seq_nr_from_node(
 
 /// Replay an event on the executor.
 #[tracing::instrument(skip_all, level = "warn", name = "update_state::do_next_event")]
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn do_next_event<S: Spec, Rt: Runtime<S>>(
     seq_role: SequencerRole,
     next_sequence_number_according_to_node: u64,

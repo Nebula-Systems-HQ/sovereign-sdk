@@ -479,7 +479,7 @@ where
         _runtime: RT,
     ) -> Self {
         // Use the runtime to create an STF blueprint
-        let stf = StfBlueprint::<S, RT>::new();
+        let stf = StfBlueprint::<S, RT>::new(None);
 
         // ----- Setup and run genesis ---------
         let mut storage_manager = Sm::new_in_tempdir();
@@ -679,6 +679,7 @@ where
                 blobs.as_iters(),
                 execution_context,
                 cf,
+                None,
             ),
             blob_info,
             nonces,

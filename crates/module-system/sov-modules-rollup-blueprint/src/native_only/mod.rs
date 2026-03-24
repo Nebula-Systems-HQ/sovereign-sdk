@@ -204,6 +204,7 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
         shutdown_receiver: watch::Receiver<()>,
         shutdown_sender: tokio::sync::watch::Sender<()>,
         stop_at_rollup_height: Option<RollupHeight>,
+        shared_encryption_layer: Option<sov_encryption::EncryptionLayer>,
         bind_addr: SocketAddr,
     ) -> anyhow::Result<SequencerCreationReceipt<Self::Spec>> {
         match &rollup_config.sequencer.sequencer_kind_config {
@@ -244,6 +245,9 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
                 })
             }
             SequencerKindConfig::Preferred(seq_config) => {
+                if shared_encryption_layer.is_some() {
+                    tracing::info!("🔗 Creating PreferredSequencer with shared encryption layer");
+                }
                 let (sequencer, background_handles) =
                     PreferredSequencer::<Self::Spec, Self::Runtime, Self::DaService>::create(
                         da_service.clone(),
@@ -257,6 +261,7 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
                         api_ledger_db.clone(),
                         shutdown_sender.clone(),
                         stop_at_rollup_height,
+                        shared_encryption_layer.clone(),
                         bind_addr,
                     )
                     .await?;
@@ -381,8 +386,39 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
             is_genesis = prev_root.is_none(),
             "Recovering the state root"
         );
-        let native_stf = StfBlueprint::new();
-        let genesis_da_height = genesis_params.genesis_slot_number();
+
+        // Create shared encryption layer if any component needs it
+        let shared_encryption_layer: Option<sov_encryption::EncryptionLayer> =
+            if rollup_config.stf.encryption.is_some()
+                || rollup_config.sequencer.batch_encryption.is_some()
+            {
+                // Prefer STF encryption config, fall back to sequencer config
+                let encryption_config = rollup_config
+                    .stf
+                    .encryption
+                    .clone()
+                    .or_else(|| rollup_config.sequencer.batch_encryption.clone());
+                if let Some(config) = encryption_config {
+                    tracing::info!(
+                        "🔐 Creating shared encryption layer for STF and sequencer synchronization"
+                    );
+                    Some(
+                        sov_encryption::EncryptionLayer::new(
+                            config,
+                            Some(main_shutdown_receiver.clone()),
+                        )
+                        .await?,
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+        // Create STF with shared encryption layer
+        let native_stf = StfBlueprint::new(shared_encryption_layer.clone());
+        let genesis_slot_number = genesis_params.genesis_slot_number();
         let (prover_storage, prev_state_root, genesis_state_root) = match prev_root {
             // Missing prev_root means need for initialization
             None => {
@@ -430,7 +466,7 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
         };
 
         let da_sync_state = make_da_sync_state(
-            genesis_da_height,
+            genesis_slot_number,
             stop_at_rollup_height,
             &ledger_db,
             &da_service_with_cache,
@@ -495,7 +531,7 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
             stop_at_rollup_height,
             da_sync_state.clone(),
             da_service_with_cache,
-            genesis_da_height,
+            genesis_slot_number,
         )
         .await?;
 
@@ -510,6 +546,7 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
                 main_shutdown_receiver.clone(),
                 main_shutdown_sender.clone(),
                 stop_at_rollup_height,
+                shared_encryption_layer.clone(),
                 axum_socket_addr,
             )
             .await?;
@@ -589,7 +626,7 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
             shutdown_sender: main_shutdown_sender,
             secondary_shutdown_sender,
             background_handles,
-            genesis_slot_number: genesis_da_height,
+            genesis_slot_number,
         })
     }
 }
