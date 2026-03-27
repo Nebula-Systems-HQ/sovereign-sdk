@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use sov_metrics::{StateAccessMetric, StateMetrics};
 use sov_rollup_interface::stf::ExecutionContext;
 use sov_state::pinned_cache::PinnedCache;
-use sov_state::{Namespace, NodeLeafAndMaybeValue, SlotKey, SlotValue};
+use sov_state::{EventContainer, Namespace, NodeLeafAndMaybeValue, SlotKey, SlotValue, TypeErasedEvent};
 
 use super::super::checkpoints::StateCheckpoint;
 use super::super::internals::{FirstTimeReads, RevertableWriter};
@@ -30,6 +30,7 @@ use crate::{BasicGasMeter, GasMeter};
 pub struct TxScratchpad<S: Spec, I: StateProvider<S>> {
     pub(in crate::state::accessors) inner: RevertableWriter<I>,
     pub(in crate::state::accessors) phantom: PhantomData<S>,
+    pub(in crate::state::accessors) events: Vec<TypeErasedEvent>,
 }
 
 impl<S: Spec, I: StateProvider<S>> UniversalStateAccessor for TxScratchpad<S, I> {
@@ -83,6 +84,20 @@ impl<S: Spec, I: StateProvider<S>> GasMeter for TxScratchpad<S, I> {
     type Spec = S;
 }
 
+impl<S: Spec, I: StateProvider<S>> EventContainer for TxScratchpad<S, I> {
+    fn add_event<E: 'static + core::marker::Send + core::marker::Sync>(
+        &mut self,
+        event_key: &str,
+        event: E,
+    ) {
+        self.events.push(TypeErasedEvent::new(event_key, event));
+    }
+
+    fn add_type_erased_event(&mut self, event: TypeErasedEvent) {
+        self.events.push(event);
+    }
+}
+
 /// The list of changes caused by a single transaction
 #[derive(Debug, Clone)]
 pub struct TxChangeSet {
@@ -109,6 +124,11 @@ impl<S: Spec, I: StateProvider<S>> TxScratchpad<S, I> {
             inner: self,
             gas_meter,
         }
+    }
+
+    /// Extracts all events from this scratchpad (typically gas-related events).
+    pub fn take_events(&mut self) -> Vec<TypeErasedEvent> {
+        core::mem::take(&mut self.events)
     }
 }
 

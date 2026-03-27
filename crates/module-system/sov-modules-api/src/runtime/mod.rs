@@ -160,6 +160,18 @@ pub trait Runtime<S: Spec>:
         credential_id: &crate::CredentialId,
         state: &mut ST,
     ) -> Result<S::Address, ST::Error>;
+
+    /// Hook called after gas is charged for a transaction.
+    /// Runtimes should override this to emit a proper Bank TokenTransferred event.
+    /// The default implementation is a no-op.
+    fn on_gas_charged(
+        &self,
+        _state: &mut impl sov_state::EventContainer,
+        _gas_payer: &S::Address,
+        _sequencer: &S::Address,
+        _amount: crate::Amount,
+    ) {
+    }
 }
 
 #[cfg(feature = "native")]
@@ -220,6 +232,16 @@ pub trait Runtime<S: Spec>:
         _state: &mut impl crate::TxState<S>,
     ) -> bool {
         false
+    }
+
+    /// Hook called after gas is charged for a transaction. No-op in non-native mode.
+    fn on_gas_charged(
+        &self,
+        _state: &mut impl sov_state::EventContainer,
+        _gas_payer: &S::Address,
+        _sequencer: &S::Address,
+        _amount: crate::Amount,
+    ) {
     }
 }
 

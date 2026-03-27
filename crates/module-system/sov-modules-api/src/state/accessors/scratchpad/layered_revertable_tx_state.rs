@@ -22,21 +22,23 @@ use crate::{
 #[cfg(feature = "test-utils")]
 use crate::AccessoryStateReader;
 
-/// A snapshot of gas state at layer creation time.
+/// A snapshot of gas meter state at layer creation time.
 ///
-/// Used for tracking gas consumption and restoring the outer payer's meter state
-/// when a gas payer layer is settled (committed or reverted).
+/// Used for both gas-payer and gas-free layers:
+/// - **Gas-payer**: billing (upfront charge + refund) + exact meter restoration
+/// - **Gas-free**: exact meter restoration only (no billing)
 ///
-/// # Note on `outer_remaining_funds`
-/// This is `Amount` (not `Option<Amount>`) because gas payer layers require
-/// funds tracking to be enabled. If the outer meter's `remaining_funds` is `None`,
-/// layer creation should fail.
+/// Both paths restore the meter exactly on settlement — sub-call gas consumption
+/// does NOT affect the outer meter.
 #[derive(Clone, Debug)]
 pub struct GasSnapshot<S: Spec> {
+    /// Outer payer's initial gas (to restore on layer end).
+    pub outer_initial_gas: S::Gas,
     /// Outer payer's remaining gas (to restore on layer end).
     pub outer_remaining_gas: S::Gas,
     /// Outer payer's remaining funds (to restore on layer end).
-    pub outer_remaining_funds: Amount,
+    /// `None` when funds tracking is not enabled (e.g. gas-free layers in tests).
+    pub outer_remaining_funds: Option<Amount>,
     /// Amount charged upfront when layer was created (for refund calculation).
     /// Includes both base gas cost and priority fee reservation.
     pub upfront_charge: Amount,
@@ -127,6 +129,11 @@ impl<G: Gas> From<GasBillingError> for GasPayerError<G> {
 }
 
 /// A single layer of state changes that can be committed or reverted.
+///
+/// Layer types (distinguished by field combinations):
+/// - **Plain**: `gas_payer = None`, `gas_snapshot = None` — no meter swap, no restore
+/// - **Gas-payer**: `gas_payer = Some(addr)`, `gas_snapshot = Some(snap)` — billing + exact restore
+/// - **Gas-free**: `gas_payer = None`, `gas_snapshot = Some(snap)` — no billing, exact restore
 #[derive(Debug)]
 pub(super) struct StateLayer<S: Spec> {
     events: Vec<TypeErasedEvent>,
@@ -139,7 +146,8 @@ pub(super) struct StateLayer<S: Spec> {
     /// Used for calculating the gas cost to bill to the gas payer.
     pub(super) gas_consumed: S::Gas,
     /// Gas snapshot taken at layer creation time.
-    /// Contains the outer payer's meter state (for restoration) and gas payer's balance.
+    /// Contains the outer meter state for exact restoration on settlement.
+    /// Present for both gas-payer and gas-free layers.
     pub(super) gas_snapshot: Option<GasSnapshot<S>>,
 }
 
@@ -161,6 +169,17 @@ impl<S: Spec> StateLayer<S> {
             temp_cache: TempCache::new(),
             writes: HashMap::new(),
             gas_payer: Some(gas_payer),
+            gas_consumed: S::Gas::ZEROED,
+            gas_snapshot: Some(gas_snapshot),
+        }
+    }
+
+    fn new_gas_free(gas_snapshot: GasSnapshot<S>) -> Self {
+        Self {
+            events: Vec::new(),
+            temp_cache: TempCache::new(),
+            writes: HashMap::new(),
+            gas_payer: None,
             gas_consumed: S::Gas::ZEROED,
             gas_snapshot: Some(gas_snapshot),
         }
@@ -227,6 +246,39 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         self
     }
 
+    /// Adds a gas-free revertable layer that does not consume gas from the parent meter.
+    ///
+    /// Used for system/module operations (clearing, liquidation, funding) dispatched
+    /// as dependency calls without a gas payer. The meter is swapped to unlimited values
+    /// so inner charges always succeed, and restored exactly on commit/revert.
+    ///
+    /// State changes (writes, events) still commit/revert normally.
+    pub fn add_revertable_layer_gas_free(&mut self) -> &mut Self {
+        let snapshot = if let Some(meter) = self.inner.try_as_basic_gas_meter() {
+            let snap = GasSnapshot {
+                outer_initial_gas: meter.initial_gas,
+                outer_remaining_gas: meter.remaining_gas,
+                outer_remaining_funds: meter.remaining_funds,
+                upfront_charge: Amount::ZERO,
+                gas_price: meter.gas_price,
+            };
+            meter.initial_gas = S::Gas::MAX;
+            meter.remaining_gas = S::Gas::MAX;
+            meter.remaining_funds = Some(Amount::MAX);
+            snap
+        } else {
+            GasSnapshot {
+                outer_initial_gas: S::Gas::MAX,
+                outer_remaining_gas: S::Gas::MAX,
+                outer_remaining_funds: None,
+                upfront_charge: Amount::ZERO,
+                gas_price: <S::Gas as Gas>::Price::ZEROED,
+            }
+        };
+        self.layers.push(StateLayer::new_gas_free(snapshot));
+        self
+    }
+
     /// Adds a new revertable layer with a different gas payer on top of the current layers.
     ///
     /// This method performs a "meter swap" - switching the gas payer context for
@@ -289,7 +341,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         priority_fee_bips: u64,
     ) -> Result<GasSnapshot<S>, GasPayerError<S::Gas>> {
         // Phase 1: Read meter values (borrow meter, extract values, drop borrow)
-        let (remaining_gas, remaining_funds, gas_cost, gas_price) = {
+        let (initial_gas, remaining_gas, remaining_funds, gas_cost, gas_price) = {
             let meter = match self.inner.try_as_basic_gas_meter() {
                 Some(m) => m,
                 None => {
@@ -304,7 +356,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                 .remaining_funds
                 .ok_or(GasPayerError::FundsTrackingNotEnabled)?;
 
-            (meter.remaining_gas, remaining_funds, gas_cost, gas_price)
+            (meter.initial_gas, meter.remaining_gas, remaining_funds, gas_cost, gas_price)
         }; // meter borrow dropped
 
         // Include priority fee in the upfront reservation so the full amount is locked
@@ -340,8 +392,9 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
 
         // Phase 4: Create snapshot and perform meter swap (borrow meter again)
         let snapshot = GasSnapshot {
+            outer_initial_gas: initial_gas,
             outer_remaining_gas: remaining_gas,
-            outer_remaining_funds: remaining_funds,
+            outer_remaining_funds: Some(remaining_funds),
             upfront_charge,
             gas_price,
             priority_fee_bips,
@@ -352,6 +405,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             // and set remaining_gas to the requested gas_limit to give the gas payer
             // an independent budget (not constrained by outer meter's remaining_gas)
             meter.remaining_funds = Some(upfront_charge);
+            meter.initial_gas = gas_limit;
             meter.remaining_gas = gas_limit;
         }
 
@@ -415,22 +469,24 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             biller.transfer_gas_tokens(sequencer, &info.gas_payer, refund, self.inner)?;
         }
 
+        // Emit a single consolidated gas event for the net cost
+        if actual_cost > Amount::ZERO {
+            biller.emit_net_gas_event(
+                &info.gas_payer,
+                sequencer,
+                actual_cost,
+                info.gas_consumed,
+                info.gas_snapshot.gas_price,
+                self.inner,
+            );
+        }
+
         // Record actual gas consumed so callers can read it
         self.last_gas_consumed = Some(info.gas_consumed);
 
-        // Phase 3: Restore outer payer's meter state (borrow meter again)
-        if let Some(meter) = self.inner.try_as_basic_gas_meter() {
-            meter.remaining_gas = info
-                .gas_snapshot
-                .outer_remaining_gas
-                .checked_sub(info.gas_consumed)
-                .ok_or_else(|| {
-                    GasBillingError::StateAccessError(
-                        "Gas consumed exceeds outer remaining gas".to_string(),
-                    )
-                })?;
-            meter.remaining_funds = Some(info.gas_snapshot.outer_remaining_funds);
-        }
+        // Phase 3: Exact restoration of outer payer's meter state.
+        // Sub-call gas consumption does NOT affect the outer meter.
+        self.restore_meter_from_snapshot(&info.gas_snapshot);
 
         Ok(())
     }
@@ -451,12 +507,16 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             layer.gas_payer.is_none(),
             "Use commit_layer() for layers with gas payers"
         );
+        debug_assert!(
+            layer.gas_snapshot.is_none(),
+            "Use commit_layer_gas_free() for gas-free layers (have gas_snapshot but no gas_payer)"
+        );
         self.commit_layer_internal(layer);
     }
 
     /// Reverts the top layer without billing. Use `revert_layer` for production code.
     ///
-    /// This skips gas settlement - only use for layers without gas payers or in tests.
+    /// This skips gas settlement - only use for plain layers (no gas payer, no gas snapshot).
     ///
     /// # Panics
     /// Panics if there are no layers to revert.
@@ -470,7 +530,75 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             layer.gas_payer.is_none(),
             "Use revert_layer() for layers with gas payers"
         );
+        debug_assert!(
+            layer.gas_snapshot.is_none(),
+            "Use revert_layer_gas_free() for gas-free layers (have gas_snapshot but no gas_payer)"
+        );
         self.layers.pop();
+    }
+
+    /// Commits the top gas-free layer, restoring the meter without deducting gas.
+    ///
+    /// State changes (writes, events) are committed normally. Gas consumed in
+    /// this layer is zeroed before merge so it doesn't propagate to parent layers.
+    ///
+    /// # Panics
+    /// Panics if there are no layers, or the top layer is not gas-free.
+    pub fn commit_layer_gas_free(&mut self) {
+        if self.layers.is_empty() {
+            panic!("Cannot commit layer: no layers exist");
+        }
+
+        let mut layer = self.layers.pop().unwrap();
+        debug_assert!(
+            layer.gas_payer.is_none(),
+            "Gas-free layers must not have a gas payer"
+        );
+        debug_assert!(
+            layer.gas_snapshot.is_some(),
+            "Gas-free layers must have a gas snapshot"
+        );
+
+        let snapshot = layer.gas_snapshot.take().unwrap();
+        // Zero out gas_consumed so commit_layer_internal doesn't merge it upward.
+        layer.gas_consumed = S::Gas::ZEROED;
+        self.commit_layer_internal(layer);
+        self.restore_meter_from_snapshot(&snapshot);
+    }
+
+    /// Reverts the top gas-free layer, restoring the meter without deducting gas.
+    ///
+    /// All state changes are discarded. The meter is restored to its pre-layer state.
+    ///
+    /// # Panics
+    /// Panics if there are no layers, or the top layer is not gas-free.
+    pub fn revert_layer_gas_free(&mut self) {
+        if self.layers.is_empty() {
+            panic!("Cannot revert layer: no layers exist");
+        }
+
+        let layer = self.layers.last().unwrap();
+        debug_assert!(
+            layer.gas_payer.is_none(),
+            "Gas-free layers must not have a gas payer"
+        );
+        debug_assert!(
+            layer.gas_snapshot.is_some(),
+            "Gas-free layers must have a gas snapshot"
+        );
+
+        let snapshot = self.layers.pop().unwrap().gas_snapshot.unwrap();
+        self.restore_meter_from_snapshot(&snapshot);
+    }
+
+    /// Restores the gas meter to the exact state captured in a snapshot.
+    /// Used by both gas-payer (apply_gas_billing) and gas-free (commit/revert_layer_gas_free).
+    fn restore_meter_from_snapshot(&mut self, snapshot: &GasSnapshot<S>) {
+        if let Some(meter) = self.inner.try_as_basic_gas_meter() {
+            meter.initial_gas = snapshot.outer_initial_gas;
+            meter.remaining_gas = snapshot.outer_remaining_gas;
+            meter.remaining_funds = snapshot.outer_remaining_funds;
+        }
     }
 
     /// Commits the top layer, billing the gas payer if present.

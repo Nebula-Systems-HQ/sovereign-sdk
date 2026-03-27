@@ -4,7 +4,9 @@
 //! gas billing operations. This trait is implemented by the Bank module to enable
 //! gas payer layer billing in [`LayeredRevertableTxState`].
 
-use crate::{Amount, Spec, StateAccessor};
+use sov_state::EventContainer;
+
+use crate::{Amount, Gas, Spec, StateAccessor};
 
 /// Error type for gas billing operations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,11 +47,11 @@ pub trait GasBiller<S: Spec> {
         state: &mut impl StateAccessor,
     ) -> Result<Option<Amount>, GasBillingError>;
 
-    /// Transfer gas tokens from one address to another.
+    /// Transfer gas tokens from one address to another (silent, no events).
     ///
-    /// This is used to bill gas payers when settling a gas payer layer.
-    /// The transfer is performed directly to ensure gas payments are permanent
-    /// and not affected by layer reverts.
+    /// This is used internally by gas payer layers for upfront charge and refund.
+    /// No events are emitted — use [`emit_net_gas_event`] after settlement to emit
+    /// a single consolidated event for the net gas cost.
     ///
     /// # Arguments
     /// * `from` - The address to transfer from (gas payer).
@@ -63,4 +65,19 @@ pub trait GasBiller<S: Spec> {
         amount: Amount,
         state: &mut impl StateAccessor,
     ) -> Result<(), GasBillingError>;
+
+    /// Emit a consolidated gas event after gas payer layer settlement.
+    ///
+    /// Called once after the upfront charge + refund cycle to emit a single
+    /// `TokenTransferred` event (for balance tracking) and a `GasCharged` event
+    /// (for diagnostics) with the net gas cost.
+    fn emit_net_gas_event(
+        &self,
+        gas_payer: &S::Address,
+        sequencer: &S::Address,
+        net_amount: Amount,
+        gas_consumed: S::Gas,
+        gas_price: <S::Gas as Gas>::Price,
+        state: &mut impl EventContainer,
+    );
 }

@@ -1,8 +1,8 @@
 use sov_modules_api::macros::serialize;
-use sov_modules_api::Spec;
+use sov_modules_api::{Amount, Spec};
 
 use crate::utils::TokenHolder;
-use crate::{Amount, Coins, TokenId};
+use crate::{Coins, TokenId};
 
 /// Bank Event
 #[derive(Debug, PartialEq, Clone, schemars::JsonSchema)]
@@ -59,5 +59,19 @@ pub enum Event<S: Spec> {
         mint_to_identity: TokenHolder<S>,
         /// The coins minted
         coins: Coins,
+    },
+    /// Diagnostic event emitted after gas payer layer settlement.
+    /// Contains the net gas cost and gas metering details.
+    GasCharged {
+        /// The address that paid for gas
+        gas_payer: TokenHolder<S>,
+        /// The sequencer that received the gas payment
+        sequencer: TokenHolder<S>,
+        /// The net amount of gas tokens charged (actual_cost = dot(gas_consumed, gas_price))
+        net_amount: Amount,
+        /// Gas units consumed during execution
+        gas_consumed: [u64; 2],
+        /// Gas price per dimension
+        gas_price: [u128; 2],
     },
 }

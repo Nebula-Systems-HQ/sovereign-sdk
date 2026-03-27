@@ -104,6 +104,7 @@ impl<S: Spec> StateProvider<S> for StateCheckpoint<S> {
         TxScratchpad {
             inner: RevertableWriter::new(self),
             phantom: PhantomData,
+            events: Vec::new(),
         }
     }
 }
