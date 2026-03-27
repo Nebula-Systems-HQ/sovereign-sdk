@@ -261,6 +261,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                 outer_remaining_funds: meter.remaining_funds,
                 upfront_charge: Amount::ZERO,
                 gas_price: meter.gas_price,
+                priority_fee_bips: PriorityFeeBips::ZERO,
             };
             meter.initial_gas = S::Gas::MAX;
             meter.remaining_gas = S::Gas::MAX;
@@ -273,6 +274,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                 outer_remaining_funds: None,
                 upfront_charge: Amount::ZERO,
                 gas_price: <S::Gas as Gas>::Price::ZEROED,
+                priority_fee_bips: PriorityFeeBips::ZERO,
             }
         };
         self.layers.push(StateLayer::new_gas_free(snapshot));
