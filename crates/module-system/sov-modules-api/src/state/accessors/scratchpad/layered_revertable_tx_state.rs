@@ -239,6 +239,13 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         self.last_gas_consumed
     }
 
+    /// Clears the last_gas_consumed value.
+    /// Call before dispatching to prevent stale reads when a dispatch
+    /// fails at layer creation (e.g. InsufficientPayerBalance).
+    pub fn clear_last_gas_consumed(&mut self) {
+        self.last_gas_consumed = None;
+    }
+
     /// Adds a new revertable layer on top of the current layers.
     /// This pushes a new layer onto the layers stack.
     pub fn add_revertable_layer(&mut self) -> &mut Self {
