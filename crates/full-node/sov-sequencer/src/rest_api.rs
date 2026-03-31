@@ -177,6 +177,7 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
                 axum::routing::get(Self::axum_list_events),
             )
             .route("/sequencer/role", axum::routing::get(Self::axum_get_role))
+            // TODO: Should realistically be /sequencer/readyz, but leaving as /readyz for now.
             .route("/readyz", axum::routing::get(Self::axum_get_readyz));
 
         #[cfg(feature = "test-utils")]
