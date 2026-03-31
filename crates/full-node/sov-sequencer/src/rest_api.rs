@@ -462,7 +462,9 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
         Ok(state.sequencer.sequencer_role().await.into())
     }
 
-    async fn axum_get_readyz(state: State<Self>) -> ApiResult<()> {
+    async fn axum_get_readyz(
+        state: State<Self>,
+    ) -> Result<&'static str, axum::response::Response> {
         if let Err(details) = state.sequencer.is_ready().await {
             return Err(error_not_fully_synced(details).into_response());
         }
@@ -474,7 +476,7 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
             }
             .into_response());
         }
-        Ok(().into())
+        Ok("ok")
     }
 
     async fn axum_get_tx_status(
