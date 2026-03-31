@@ -236,11 +236,7 @@ mod tests {
 
     #[test]
     fn test_max_raw_tx_size_is_10_kb() {
-        assert_eq!(
-            MAX_RAW_TX_SIZE,
-            10 * 1024,
-            "MAX_RAW_TX_SIZE must be 10 KB"
-        );
+        assert_eq!(MAX_RAW_TX_SIZE, 10 * 1024, "MAX_RAW_TX_SIZE must be 10 KB");
     }
 
     #[test]
