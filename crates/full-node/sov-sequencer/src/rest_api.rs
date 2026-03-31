@@ -176,7 +176,8 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
                 "/sequencer/unstable/events",
                 axum::routing::get(Self::axum_list_events),
             )
-            .route("/sequencer/role", axum::routing::get(Self::axum_get_role));
+            .route("/sequencer/role", axum::routing::get(Self::axum_get_role))
+            .route("/readyz", axum::routing::get(Self::axum_get_readyz));
 
         #[cfg(feature = "test-utils")]
         let router = router
@@ -459,6 +460,21 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
 
     async fn axum_get_role(state: State<Self>) -> ApiResult<crate::SequencerRole> {
         Ok(state.sequencer.sequencer_role().await.into())
+    }
+
+    async fn axum_get_readyz(state: State<Self>) -> ApiResult<()> {
+        if let Err(details) = state.sequencer.is_ready().await {
+            return Err(error_not_fully_synced(details).into_response());
+        }
+        if state.sequencer.sequencer_role().await != crate::SequencerRole::BatchProducer {
+            return Err(sov_rest_utils::ErrorObject {
+                status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                message: "Node is not the leader".to_string(),
+                details: Default::default(),
+            }
+            .into_response());
+        }
+        Ok(().into())
     }
 
     async fn axum_get_tx_status(
