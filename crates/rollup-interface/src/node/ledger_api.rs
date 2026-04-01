@@ -506,6 +506,15 @@ pub trait LedgerStateProvider {
             .map(|mut txs| txs.pop().unwrap_or(None))
     }
 
+    /// Get a range of events by number. Returns `(event_number, stored_event)` pairs
+    /// in ascending order. If `end` is beyond the database, the result will be
+    /// shorter than the requested range.
+    async fn get_events_range(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<(u64, StoredEvent)>, Self::Error>;
+
     /// Get a range of slots. This query is the most efficient way to
     /// fetch large numbers of slots, since it allows for easy batching of
     /// db queries for adjacent items.

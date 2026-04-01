@@ -828,6 +828,22 @@ impl LedgerStateProvider for LedgerDb {
         rpc_reader.get_event_key_counts().await
     }
 
+    async fn get_events_range(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<(u64, StoredEvent)>, Self::Error> {
+        anyhow::ensure!(start <= end, "start must be <= end");
+        let rpc_reader = self.get_rpc_reader().await?;
+        let range = EventNumber(start)..EventNumber(end);
+        let events = rpc_reader.get_event_range(&range).await?;
+        Ok(events
+            .into_iter()
+            .enumerate()
+            .map(|(i, event)| (start + i as u64, event))
+            .collect())
+    }
+
     async fn get_slots_range<B, T, E>(
         &self,
         start: SlotNumber,

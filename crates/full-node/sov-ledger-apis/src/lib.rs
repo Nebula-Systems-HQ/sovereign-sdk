@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Range;
 
+use axum::body::Body;
 use axum::extract::{Request, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::middleware::Next;
@@ -159,6 +160,7 @@ where
                 )),
             )
             .route("/events", get(Self::list_events))
+            .route("/events/bulk", get(Self::bulk_events))
             .route("/events/counts", get(Self::get_event_key_counts))
             .route("/events/latest", get(Self::get_latest_event))
             .nest(
@@ -377,6 +379,97 @@ where
             .flatten()
             .collect::<Vec<_>>();
         Ok(events.into())
+    }
+
+    /// Streams events as NDJSON (newline-delimited JSON) in chunks.
+    /// Each chunk is fetched via a single RocksDB range scan, serialized,
+    /// and flushed before the next chunk is read, keeping memory usage constant.
+    ///
+    /// Query params:
+    /// - `start`: first event number (inclusive)
+    /// - `end`: last event number (inclusive)
+    async fn bulk_events(
+        State(state): State<LedgerState<T>>,
+        Query(params): Query<BulkEventsParams>,
+    ) -> Response {
+        const CHUNK_SIZE: u64 = 10_000;
+        const MAX_RANGE: u64 = 10_000_000;
+
+        let start = params.start;
+        let end = params.end.saturating_add(1); // convert inclusive end to exclusive for internal range
+
+        if start > params.end {
+            return ErrorObject {
+                status: StatusCode::BAD_REQUEST,
+                message: "Bad request".to_string(),
+                details: json_obj!({ "error": "start must be <= end" }),
+            }
+            .into_response();
+        }
+
+        if end - start > MAX_RANGE {
+            return ErrorObject {
+                status: StatusCode::BAD_REQUEST,
+                message: "Bad request".to_string(),
+                details: json_obj!({ "error": format!("range too large, max is {MAX_RANGE} events") }),
+            }
+            .into_response();
+        }
+
+        let stream = futures::stream::unfold(start, move |cursor| {
+            let ledger = state.ledger.clone();
+            async move {
+                if cursor >= end {
+                    return None;
+                }
+                let chunk_end = end.min(cursor + CHUNK_SIZE);
+                let events = match ledger.get_events_range(cursor, chunk_end).await {
+                    Ok(events) => events,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to fetch events range {cursor}..{chunk_end}");
+                        let err_line = serde_json::to_vec(
+                            &serde_json::json!({"error": format!("database error reading events {cursor}..{chunk_end}")})
+                        ).unwrap_or_default();
+                        return Some((Ok::<_, std::convert::Infallible>(
+                            [err_line, vec![b'\n']].concat(),
+                        ), end));
+                    }
+                };
+
+                if events.is_empty() {
+                    return None;
+                }
+
+                let mut buf = Vec::new();
+                for (num, stored_event) in &events {
+                    match RuntimeEventResponse::<E>::try_from((*num, stored_event)) {
+                        Ok(event) => match serde_json::to_vec(&event) {
+                            Ok(json) => {
+                                buf.extend_from_slice(&json);
+                                buf.push(b'\n');
+                            }
+                            Err(e) => {
+                                // Event deserialized from DB but failed JSON serialization —
+                                // this should not happen in practice, log and skip.
+                                tracing::warn!(event_number = num, error = %e, "Failed to serialize event to JSON, skipping");
+                            }
+                        },
+                        Err(e) => {
+                            tracing::warn!(event_number = num, error = %e, "Failed to deserialize event from DB, skipping");
+                        }
+                    }
+                }
+
+                let next_cursor = chunk_end;
+                Some((Ok::<_, std::convert::Infallible>(buf), next_cursor))
+            }
+        });
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/x-ndjson")
+            .body(Body::from_stream(stream))
+            .unwrap()
     }
 
     async fn get_latest_event(
@@ -854,6 +947,12 @@ impl ReportableWsError for WsLedgerError {
 #[derive(Deserialize)]
 struct EventFilter {
     prefix: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct BulkEventsParams {
+    start: u64,
+    end: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
