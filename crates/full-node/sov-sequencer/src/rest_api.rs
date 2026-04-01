@@ -464,13 +464,23 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
     }
 
     async fn axum_get_readyz(state: State<Self>) -> Result<&'static str, axum::response::Response> {
+        let role = state.sequencer.sequencer_role().await;
         if let Err(details) = state.sequencer.is_ready().await {
-            return Err(error_not_fully_synced(details).into_response());
+            tracing::warn!(?details, ?role, "Node is not ready");
+            return Err(sov_rest_utils::ErrorObject {
+                status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                message: format!(
+                    "Node (role: {role:?}) is not ready: {details:?}"
+                ),
+                details: Default::default(),
+            }
+            .into_response());
         }
-        if state.sequencer.sequencer_role().await != crate::SequencerRole::BatchProducer {
+        if role != crate::SequencerRole::BatchProducer {
+            tracing::warn!(?role, "Node is not the leader");
             return Err(sov_rest_utils::ErrorObject {
                 status: axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                message: "Node is not the leader".to_string(),
+                message: format!("Node is a {role:?}, not a BatchProducer"),
                 details: Default::default(),
             }
             .into_response());
