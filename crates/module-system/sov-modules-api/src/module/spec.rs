@@ -278,7 +278,7 @@ impl<S: Spec> Context<S> {
             sequencer,
             sequencer_da_address,
             gas_refund_recipient: payer,
-            gas_payer_override: None,
+            gas_payer_override: if payer != sender { Some(payer) } else { None },
             sequencing_data,
             execution_context,
             sequencer_type,
@@ -334,5 +334,72 @@ mod arbitrary {
                 SequencerType::NonPreferred,
             ))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sov_mock_da::{MockAddress, MockDaSpec};
+    use sov_mock_zkvm::MockZkvm;
+    use sov_rollup_interface::execution_mode::Native;
+    use sov_rollup_interface::stf::ExecutionContext;
+
+    use super::Context;
+    use crate::default_spec::DefaultSpec;
+    use crate::transaction::Credentials;
+    use crate::{Address, SequencerType};
+
+    type TestSpec = DefaultSpec<MockDaSpec, MockZkvm, MockZkvm, Native>;
+
+    fn test_context(sender: Address, payer: Address) -> Context<TestSpec> {
+        Context::<TestSpec>::with_payer(
+            sender,
+            Credentials::default(),
+            Address::from([2; 28]),
+            MockAddress::new([3; 32]),
+            payer,
+            None,
+            ExecutionContext::Node,
+            SequencerType::NonPreferred,
+        )
+    }
+
+    #[test]
+    fn effective_gas_payer_returns_override_when_set() {
+        let sender = Address::from([0; 28]);
+        let override_payer = Address::from([1; 28]);
+        let mut context = test_context(sender, sender);
+
+        assert_eq!(context.effective_gas_payer(), &sender);
+        assert_eq!(context.gas_payer_override(), None);
+
+        context.set_gas_payer_override(override_payer);
+        assert_eq!(context.effective_gas_payer(), &override_payer);
+        assert_eq!(context.gas_payer_override(), Some(&override_payer));
+
+        context.clear_gas_payer_override();
+        assert_eq!(context.effective_gas_payer(), &sender);
+        assert_eq!(context.gas_payer_override(), None);
+    }
+
+    #[test]
+    fn with_payer_sets_override_when_payer_differs() {
+        let sender = Address::from([0; 28]);
+        let payer = Address::from([1; 28]);
+        let context = test_context(sender, payer);
+
+        assert_eq!(context.gas_payer_override(), Some(&payer));
+        assert_eq!(context.effective_gas_payer(), &payer);
+        assert_eq!(context.gas_refund_recipient(), &payer);
+    }
+
+    #[test]
+    fn with_payer_no_override_when_payer_equals_sender() {
+        let sender = Address::from([0; 28]);
+        let context = test_context(sender, sender);
+
+        assert_eq!(context.gas_payer_override(), None);
+        assert_eq!(context.effective_gas_payer(), &sender);
+        assert_eq!(context.gas_refund_recipient(), &sender);
     }
 }

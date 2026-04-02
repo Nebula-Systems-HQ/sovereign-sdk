@@ -10,7 +10,17 @@ use crate::module::Spec;
 use crate::state::traits::{delegate_version_reader, PerBlockCache, PinnedCacheAccessor};
 use crate::{BasicGasMeter, Gas, GasMeter, GasMeteringError, GetGasPrice};
 
-/// A working set that can be used to charge gas for pre transaction execution checks.
+/// Pre-execution working set used for transaction processing steps that run before gas
+/// reservation: context resolution, uniqueness checks, marking attempts, and the
+/// `pre_reserve_gas` hook.
+///
+/// This type has broader state access than strictly necessary for pre-execution
+/// (including `ProvableStateWriter<Kernel>` and `AccessoryStateWriter`) because the
+/// `pre_reserve_gas` hook may need to read or write gas delegation configuration in
+/// privileged state. Pre-exec changes carried forward into the [`TxScratchpad`] via
+/// [`PreExecWorkingSet::to_scratchpad_and_gas_meter`] survive later transaction
+/// execution reverts; changes made after [`PreExecWorkingSet::commit`] are discarded
+/// by [`PreExecWorkingSet::revert`].
 pub struct PreExecWorkingSet<S: Spec, I: StateProvider<S>> {
     pub(super) inner: TxScratchpad<S, I>,
     pub(super) gas_meter: BasicGasMeter<S>,

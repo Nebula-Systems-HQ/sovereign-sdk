@@ -139,7 +139,12 @@ pub trait Runtime<S: Spec>:
     }
 
     /// Hook called after authentication and uniqueness marking, but before gas reservation.
-    /// Runtimes can override this to redirect gas billing for delegated transactions.
+    /// Runtimes can override this to redirect gas billing for delegated transactions
+    /// (for example by calling `context.set_gas_payer_override()`).
+    ///
+    /// Runs with full `TxState<S>` access, including kernel and accessory writes.
+    /// On failure, all state changes since the last [`crate::PreExecWorkingSet::commit`]
+    /// are reverted and the transaction is skipped.
     fn pre_reserve_gas(
         &mut self,
         _call: &Self::Decodable,
@@ -228,7 +233,12 @@ pub trait Runtime<S: Spec>:
     type Auth: TransactionAuthenticator<S>;
 
     /// Hook called after authentication and uniqueness marking, but before gas reservation.
-    /// Runtimes can override this to redirect gas billing for delegated transactions.
+    /// Runtimes can override this to redirect gas billing for delegated transactions
+    /// (for example by calling `context.set_gas_payer_override()`).
+    ///
+    /// Runs with full `TxState<S>` access, including kernel and accessory writes.
+    /// On failure, all state changes since the last [`crate::PreExecWorkingSet::commit`]
+    /// are reverted and the transaction is skipped.
     fn pre_reserve_gas(
         &mut self,
         _call: &Self::Decodable,

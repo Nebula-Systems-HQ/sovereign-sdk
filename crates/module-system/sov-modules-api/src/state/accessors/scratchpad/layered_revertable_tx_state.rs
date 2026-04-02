@@ -365,15 +365,19 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                 .remaining_funds
                 .ok_or(GasPayerError::FundsTrackingNotEnabled)?;
 
-            (meter.initial_gas, meter.remaining_gas, remaining_funds, gas_cost, gas_price)
+            (
+                meter.initial_gas,
+                meter.remaining_gas,
+                remaining_funds,
+                gas_cost,
+                gas_price,
+            )
         }; // meter borrow dropped
 
         // Include priority fee in the upfront reservation so the full amount is locked
         // before execution. upfront = base_cost + priority_fee(base_cost)
         let priority_fee_bips = PriorityFeeBips(priority_fee_bips);
-        let priority_reservation = priority_fee_bips
-            .apply(gas_cost)
-            .unwrap_or(Amount::ZERO);
+        let priority_reservation = priority_fee_bips.apply(gas_cost).unwrap_or(Amount::ZERO);
         let upfront_charge = Amount(gas_cost.0.saturating_add(priority_reservation.0));
 
         // Phase 2: Read gas payer's balance (borrow self.inner as StateAccessor)
