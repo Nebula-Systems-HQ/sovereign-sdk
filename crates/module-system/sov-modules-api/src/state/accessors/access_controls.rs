@@ -181,6 +181,9 @@ impl<S: Spec, I: StateProvider<S>> StateWriter<User> for TxScratchpad<S, I> {
 
 impl<S: Spec, I: StateProvider<S>> ProvableStateReader<User> for PreExecWorkingSet<S, I> {}
 impl<S: Spec, I: StateProvider<S>> ProvableStateWriter<User> for PreExecWorkingSet<S, I> {}
+impl<S: Spec, I: StateProvider<S>> ProvableStateReader<Kernel> for PreExecWorkingSet<S, I> {}
+impl<S: Spec, I: StateProvider<S>> ProvableStateWriter<Kernel> for PreExecWorkingSet<S, I> {}
+impl<S: Spec, I: StateProvider<S>> AccessoryStateWriter for PreExecWorkingSet<S, I> {}
 
 impl<S: Spec, I: StateProvider<S>> ProvableStateReader<User> for WorkingSet<S, I> {}
 impl<S: Spec, I: StateProvider<S>> ProvableStateReader<Kernel> for WorkingSet<S, I> {}

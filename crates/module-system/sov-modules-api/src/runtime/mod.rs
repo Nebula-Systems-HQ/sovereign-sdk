@@ -138,6 +138,17 @@ pub trait Runtime<S: Spec>:
         0
     }
 
+    /// Hook called after authentication and uniqueness marking, but before gas reservation.
+    /// Runtimes can override this to redirect gas billing for delegated transactions.
+    fn pre_reserve_gas(
+        &mut self,
+        _call: &Self::Decodable,
+        _context: &mut Context<S>,
+        _state: &mut impl crate::TxState<S>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Checks if a system transaction should be rejected based on the totality of its context.
     fn is_unauthorized_system_tx(
         &self,
@@ -215,6 +226,17 @@ pub trait Runtime<S: Spec>:
 
     /// Responsible for authenticating transactions.
     type Auth: TransactionAuthenticator<S>;
+
+    /// Hook called after authentication and uniqueness marking, but before gas reservation.
+    /// Runtimes can override this to redirect gas billing for delegated transactions.
+    fn pre_reserve_gas(
+        &mut self,
+        _call: &Self::Decodable,
+        _context: &mut Context<S>,
+        _state: &mut impl crate::TxState<S>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     /// Gets the operating mode of the runtime (Zk or Optimistic).
     fn operating_mode(genesis: &Self::GenesisConfig) -> OperatingMode;

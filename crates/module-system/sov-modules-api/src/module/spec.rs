@@ -165,6 +165,8 @@ pub struct Context<S: Spec> {
     sequencing_data: Option<Bytes>,
     /// The rollup address that pays the gas fees for the transaction.
     gas_refund_recipient: S::Address,
+    /// Optional override for who should actually fund gas reservation/refunds.
+    gas_payer_override: Option<S::Address>,
     /// The execution context of the transaction.
     execution_context: ExecutionContext,
     /// The type of sequencer that published the transaction.
@@ -200,6 +202,26 @@ impl<S: Spec> Context<S> {
     /// Updates the rollup address which will receive any gas refund from the transaction.
     pub fn set_gas_refund_recipient(&mut self, recipient: S::Address) {
         self.gas_refund_recipient = recipient;
+    }
+
+    /// Returns the explicit gas payer override, if one has been set.
+    pub fn gas_payer_override(&self) -> Option<&S::Address> {
+        self.gas_payer_override.as_ref()
+    }
+
+    /// Sets the gas payer override for this transaction context.
+    pub fn set_gas_payer_override(&mut self, payer: S::Address) {
+        self.gas_payer_override = Some(payer);
+    }
+
+    /// Clears any explicit gas payer override.
+    pub fn clear_gas_payer_override(&mut self) {
+        self.gas_payer_override = None;
+    }
+
+    /// Returns the effective gas payer for reservation.
+    pub fn effective_gas_payer(&self) -> &S::Address {
+        self.gas_payer_override.as_ref().unwrap_or(&self.sender)
     }
 
     /// Returns the execution context of the transaction.
@@ -256,6 +278,7 @@ impl<S: Spec> Context<S> {
             sequencer,
             sequencer_da_address,
             gas_refund_recipient: payer,
+            gas_payer_override: None,
             sequencing_data,
             execution_context,
             sequencer_type,

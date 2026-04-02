@@ -82,8 +82,10 @@ impl<S: Spec> HasGasPayer<S> for StandardProvenRollupCapabilities<'_, S> {
         state: &mut impl StateAccessor,
     ) -> anyhow::Result<()> {
         self.bank
-            .reserve_gas(tx, gas_price, context.sender(), state)
-            .map_err(Into::into)
+            .reserve_gas(tx, gas_price, context.effective_gas_payer(), state)
+            .map_err(anyhow::Error::from)?;
+        context.set_gas_refund_recipient(*context.effective_gas_payer());
+        Ok(())
     }
 }
 
@@ -98,6 +100,14 @@ impl<'a, S: Spec> HasGasPayer<S>
         context: &mut Context<S>,
         state: &mut impl StateAccessor,
     ) -> anyhow::Result<()> {
+        if context.gas_payer_override().is_some() {
+            self.bank
+                .reserve_gas(tx, gas_price, context.effective_gas_payer(), state)
+                .map_err(anyhow::Error::from)?;
+            context.set_gas_refund_recipient(*context.effective_gas_payer());
+            return Ok(());
+        }
+
         self.gas_payer
             .try_reserve_gas(tx, gas_price, context, state)
             .map_err(Into::into)

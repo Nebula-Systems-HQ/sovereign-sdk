@@ -80,6 +80,15 @@ pub fn process_unauthorized_tx<S: Spec, R: Runtime<S>>(
 
     // Note that this is currently set to zero! We leave the logic in place in case we add non-zero price cases in future.
     let gas_price = pre_exec_working_set.gas_price();
+    if let Err(err) = runtime.pre_reserve_gas(&message, &mut ctx, &mut pre_exec_working_set) {
+        let (scratchpad, pre_exec_gas_meter) = pre_exec_working_set.revert();
+        return (
+            Err(TxProcessingError::CannotReserveGas(err.to_string())),
+            scratchpad.commit(),
+            pre_exec_gas_meter,
+        );
+    }
+
     // After this check, we are confident that the transaction sender can cover the costs of transaction processing.
     if let Err(err) =
         runtime
