@@ -25,7 +25,7 @@ use time::OffsetDateTime;
 // Re-export for internal use
 pub(crate) use sov_full_node_configs::sequencer::LeaderElectionConfig;
 
-#[derive(Debug, FromRow, PartialEq)]
+#[derive(Debug, Clone, FromRow, PartialEq)]
 pub(crate) struct SequencerLeader {
     pub(crate) node_id: String,
     pub(crate) last_updated: OffsetDateTime,
@@ -240,6 +240,27 @@ impl PostgresBackend {
         }))
     }
 
+    /// Returns the current leader row, if any, without attempting to claim leadership.
+    pub(crate) async fn current_leader(&self) -> anyhow::Result<Option<SequencerLeader>> {
+        run_with_retries!(
+            &self.backoff_policy,
+            self.current_leader_in_tx(),
+            "postgres_db_backend_current_leader"
+        )
+    }
+
+    async fn current_leader_in_tx(&self) -> anyhow::Result<Option<SequencerLeader>> {
+        let mut tx: sqlx::Transaction<'_, Postgres> = self.pool.begin().await?;
+        let result = self.get_current_leader_inner(&mut tx).await?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    pub(crate) fn is_leader_fresh(leader: &SequencerLeader, leader_timeout: Duration) -> bool {
+        let timeout = time::Duration::try_from(leader_timeout).unwrap_or(time::Duration::MAX);
+        leader.last_updated >= OffsetDateTime::now_utc() - timeout
+    }
+
     /// Sends a heartbeat to update this node's registration and optionally compete for leadership.
     ///
     /// This method always updates the node's entry in the `nodes` table with the current timestamp.
@@ -375,10 +396,10 @@ impl PostgresBackend {
         Ok(DbReadOutcome::Success(()))
     }
 
-    async fn get_sequencer_leader_inner(
+    async fn get_current_leader_inner(
         &self,
         connection: &mut PgConnection,
-    ) -> Result<Option<String>, sqlx::Error> {
+    ) -> Result<Option<SequencerLeader>, sqlx::Error> {
         let maybe_leader: Option<SequencerLeader> = sqlx::query_as::<_, SequencerLeader>(
             "SELECT node_id, last_updated
                 FROM sequencer_leader
@@ -387,6 +408,14 @@ impl PostgresBackend {
         .fetch_optional(connection)
         .await?;
 
+        Ok(maybe_leader)
+    }
+
+    async fn get_sequencer_leader_inner(
+        &self,
+        connection: &mut PgConnection,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let maybe_leader = self.get_current_leader_inner(connection).await?;
         Ok(maybe_leader.map(|l| l.node_id))
     }
 

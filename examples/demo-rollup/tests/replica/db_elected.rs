@@ -1,5 +1,25 @@
 use super::*;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn test_db_elected_single_node_bootstraps_leadership() {
+    let Some(setup) = NodeDiscoveryTestSetup::new().await else {
+        return;
+    };
+
+    let node = setup
+        .start_node("bootstrap", ConfiguredNodeRole::DbElected)
+        .await;
+
+    node.wait_for_sequencer_ready().await.unwrap();
+    assert_eq!(
+        node.sequencer_role().await.unwrap(),
+        SequencerRole::BatchProducer
+    );
+
+    let _ = node.shutdown().await;
+    setup.shutdown().await;
+}
+
 /// Test that when two DbElected nodes start, one becomes leader and the other becomes replica.
 /// The leader can process transactions while the replica receives them via PostgreSQL sync.
 #[tokio::test(flavor = "multi_thread")]

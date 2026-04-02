@@ -457,24 +457,45 @@ impl PreferredSequencerDb {
                     }
                     ConfiguredNodeRole::DbElected => {
                         let backend = PostgresBackend::connect(postgres_config, bind_addr).await?;
-                        let maybe_leader = backend
-                            .heartbeat(Some(postgres_config.leader_election))
-                            .await?;
+                        let maybe_active_leader =
+                            backend.current_leader().await?.filter(|leader| {
+                                PostgresBackend::is_leader_fresh(
+                                    leader,
+                                    postgres_config.leader_election.leader_timeout(),
+                                )
+                            });
 
-                        let is_leader = maybe_leader
+                        let is_leader = maybe_active_leader
+                            .as_ref()
                             .map(|leader| leader.node_id == postgres_config.node_id)
                             .unwrap_or(false);
 
                         if is_leader {
+                            let _ = backend
+                                .heartbeat(Some(postgres_config.leader_election))
+                                .await?;
                             tracing::info!(
                                 node_id = %postgres_config.node_id,
-                                "DbElected node acquired leadership, running as BatchProducer"
+                                "DbElected node found an active self-owned leader row, running as BatchProducer"
                             );
                             (Some(Box::new(backend)), SequencerRole::BatchProducer)
                         } else {
+                            let _ = backend.heartbeat(None).await?;
+                            if let Some(active_leader) = maybe_active_leader {
+                                tracing::info!(
+                                    node_id = %postgres_config.node_id,
+                                    leader_node_id = %active_leader.node_id,
+                                    "DbElected node found another active leader row, running as PgSyncReplica"
+                                );
+                            } else {
+                                tracing::info!(
+                                    node_id = %postgres_config.node_id,
+                                    "DbElected node found no active leader row, running as PgSyncReplica until it becomes eligible to acquire leadership"
+                                );
+                            }
                             tracing::info!(
                                 node_id = %postgres_config.node_id,
-                                "DbElected node did not acquire leadership, running as PgSyncReplica"
+                                "DbElected node did not acquire leadership at startup, running as PgSyncReplica"
                             );
                             (None, SequencerRole::PgSyncReplica)
                         }
@@ -688,6 +709,109 @@ impl PreferredSequencerDb {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sov_test_utils::postgres::{
+        config_from_postgres_container, create_postgres_container, ContainerAsync,
+        CreatePostgresError, Postgres,
+    };
+    use std::net::SocketAddr;
+    use std::path::Path;
+    use std::time::Duration;
+
+    async fn setup_test_postgres() -> Option<ContainerAsync<Postgres>> {
+        match create_postgres_container().await {
+            Ok(pg) => Some(pg),
+            Err(CreatePostgresError::DockerNotSupported) => None,
+            Err(CreatePostgresError::DockerError(e)) => {
+                panic!("Failed to create Postgres container: {e}");
+            }
+        }
+    }
+
+    async fn db_elected_config(
+        postgres: &ContainerAsync<Postgres>,
+        node_id: &str,
+    ) -> PostgresConfig {
+        config_from_postgres_container(postgres, node_id.to_owned(), ConfiguredNodeRole::DbElected)
+            .await
+            .unwrap()
+    }
+
+    async fn claim_leadership(config: &PostgresConfig, bind_addr: SocketAddr) {
+        let backend = PostgresBackend::connect(config, bind_addr).await.unwrap();
+        backend
+            .heartbeat(Some(config.leader_election))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_db_elected_starts_as_leader_with_fresh_self_owned_leader_row() {
+        let Some(postgres) = setup_test_postgres().await else {
+            return;
+        };
+
+        let bind_addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let config = db_elected_config(&postgres, "node-1").await;
+        claim_leadership(&config, bind_addr).await;
+
+        let (shutdown_sender, _) = watch::channel(());
+        let (_, role) =
+            PreferredSequencerDb::new(shutdown_sender, Path::new("/tmp"), &Some(config), bind_addr)
+                .await
+                .unwrap();
+
+        assert_eq!(role, SequencerRole::BatchProducer);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_db_elected_starts_as_replica_with_stale_self_owned_leader_row() {
+        let Some(postgres) = setup_test_postgres().await else {
+            return;
+        };
+
+        let bind_addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let mut config = db_elected_config(&postgres, "node-1").await;
+        config.leader_election.leader_timeout_millis = 25;
+        claim_leadership(&config, bind_addr).await;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        let (shutdown_sender, _) = watch::channel(());
+        let (_, role) =
+            PreferredSequencerDb::new(shutdown_sender, Path::new("/tmp"), &Some(config), bind_addr)
+                .await
+                .unwrap();
+
+        assert_eq!(role, SequencerRole::PgSyncReplica);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_db_elected_starts_as_replica_when_another_leader_is_active() {
+        let Some(postgres) = setup_test_postgres().await else {
+            return;
+        };
+
+        let bind_addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let leader_config = db_elected_config(&postgres, "leader-node").await;
+        claim_leadership(&leader_config, bind_addr).await;
+
+        let replica_config = db_elected_config(&postgres, "replica-node").await;
+        let (shutdown_sender, _) = watch::channel(());
+        let (_, role) = PreferredSequencerDb::new(
+            shutdown_sender,
+            Path::new("/tmp"),
+            &Some(replica_config),
+            bind_addr,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(role, SequencerRole::PgSyncReplica);
     }
 }
 
