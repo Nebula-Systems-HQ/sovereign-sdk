@@ -343,10 +343,6 @@ where
         }
     }
 
-    // TODO: we're going to want to start using range/iters
-    // when retrieving events from ledger db.
-    // With that in mind we're using cursor based pagination
-    // so the implementation can be updated without changing the REST API interface.
     async fn list_events(
         State(state): State<LedgerState<T>>,
         pagination_opt: Option<Query<Pagination<String>>>,
@@ -365,17 +361,11 @@ where
         let end = start
             .checked_add(pagination.size as u64)
             .unwrap_or(u64::MAX);
-        let nums = (start..=end)
-            .map(EventIdentifier::Number)
-            .collect::<Vec<_>>();
         let events = state
             .ledger
-            .get_events::<RuntimeEventResponse<E>>(nums.as_slice())
+            .get_events_range::<RuntimeEventResponse<E>>(start, end)
             .await
-            .map_err(errors::database_error_response_500)?
-            .into_iter()
-            .flatten()
-            .collect::<Vec<_>>();
+            .map_err(errors::database_error_response_500)?;
         Ok(events.into())
     }
 

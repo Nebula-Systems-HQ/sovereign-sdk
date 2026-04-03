@@ -359,6 +359,22 @@ pub trait LedgerStateProvider {
     where
         E: for<'a> TryFrom<(u64, &'a StoredEvent), Error = anyhow::Error> + Send + Sync;
 
+    /// Get a contiguous range of events by number using a single range scan.
+    /// Returns only events that exist (no `Option` wrapper).
+    /// Default implementation falls back to `get_events`.
+    async fn get_events_range<E>(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<E>, Self::Error>
+    where
+        E: for<'a> TryFrom<(u64, &'a StoredEvent), Error = anyhow::Error> + Send + Sync,
+    {
+        let ids: Vec<EventIdentifier> = (start..=end).map(EventIdentifier::Number).collect();
+        let events = self.get_events(&ids).await?;
+        Ok(events.into_iter().flatten().collect())
+    }
+
     /// Get all events from a slot with an optional prefix filter. If a filter
     /// is not provided, all events from that slot are returned.
     async fn get_filtered_slot_events<B, T, E>(

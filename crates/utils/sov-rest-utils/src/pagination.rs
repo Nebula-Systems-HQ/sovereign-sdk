@@ -4,7 +4,7 @@ use std::str::FromStr;
 use serde::ser::SerializeMap;
 
 const PAGE_SIZE_DEFAULT: u32 = 25;
-const PAGE_SIZE_MAX: u32 = 100;
+const PAGE_SIZE_MAX: u32 = 10_000;
 
 /// Query parameters that specify cursor-based pagination for a collection of
 /// entities.
@@ -173,7 +173,7 @@ mod tests {
     fn bad_page_size() {
         try_deserialize(&[("page[size]", "-10")]).unwrap_err();
         try_deserialize(&[("page[size]", "0")]).unwrap_err();
-        try_deserialize(&[("page[size]", "100000")]).unwrap_err();
+        try_deserialize(&[("page[size]", "10000")]).unwrap_err();
     }
 
     #[test]

@@ -340,6 +340,19 @@ impl LedgerRpcReader {
         self.get_data_range::<EventByNumber, _, _>(range).await
     }
 
+    /// Like [`get_event_range`](Self::get_event_range) but returns `(event_number, event)` pairs,
+    /// which is needed when converting to [`RuntimeEventResponse`].
+    pub(crate) async fn get_numbered_event_range(
+        &self,
+        range: &std::ops::Range<EventNumber>,
+    ) -> anyhow::Result<Vec<(u64, StoredEvent)>> {
+        let raw_out = self
+            .db
+            .collect_in_range_async::<EventByNumber, EventNumber>(range.clone())
+            .await?;
+        Ok(raw_out.into_iter().map(|(k, v)| (k.0, v)).collect())
+    }
+
     pub(crate) async fn get_data_range<T, K, V>(
         &self,
         range: &std::ops::Range<K>,
@@ -660,6 +673,25 @@ impl LedgerStateProvider for LedgerDb {
         );
         let rpc_reader = self.get_rpc_reader().await?;
         rpc_reader.get_events(event_ids).await
+    }
+
+    async fn get_events_range<E>(
+        &self,
+        start: u64,
+        end: u64,
+    ) -> Result<Vec<E>, Self::Error>
+    where
+        E: for<'a> TryFrom<(u64, &'a StoredEvent), Error = anyhow::Error> + Send + Sync,
+    {
+        let rpc_reader = self.get_rpc_reader().await?;
+        let range =
+            EventNumber(start)..EventNumber(end.saturating_add(1));
+        let numbered_events = rpc_reader.get_numbered_event_range(&range).await?;
+        let mut out = Vec::with_capacity(numbered_events.len());
+        for (num, stored) in &numbered_events {
+            out.push((*num, stored).try_into()?);
+        }
+        Ok(out)
     }
 
     async fn get_filtered_slot_events<B, T, E>(
