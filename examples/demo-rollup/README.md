@@ -110,9 +110,9 @@ Once a batch is submitted, the output should also contain the transaction hashes
 
 ```text
 2025-10-24T12:40:48.335845Z  INFO sov_cli::workflows::node: Executing node workflow
-2025-10-24T12:40:48.348358Z  INFO sov_cli::workflows::node: Submitting tx index=0 tx_hash=0xcafedb6e4829db3d35d8490b11a3daa107d55086250411a8ab096d3564f095b7
+2025-10-24T12:40:48.348358Z  INFO sov_cli::workflows::node: Submitting tx index=0 tx_hash=0x3989ba9503b672e91eb2b93fbbd5ae83bd2bee21faf30048b5bbe501b62d4803
 2025-10-24T12:40:48.348379Z  INFO sov_node_client: Calling `publish_batch` sequencer endpoint txs_included=1
-2025-10-24T12:40:48.358028Z  INFO sov_node_client: Submitted tx hash="0xcafedb6e4829db3d35d8490b11a3daa107d55086250411a8ab096d3564f095b7"
+2025-10-24T12:40:48.358028Z  INFO sov_node_client: Submitted tx hash="0x3989ba9503b672e91eb2b93fbbd5ae83bd2bee21faf30048b5bbe501b62d4803"
 2025-10-24T12:40:48.358060Z  INFO sov_node_client: Going to wait for batch to be processed max_waiting_time=300s
 2025-10-24T12:40:50.477229Z  INFO sov_node_client: Rollup has processed the submitted batch!
 ```
@@ -122,7 +122,7 @@ this case have the TokenCreated Event
 
 ```sh,test-ci,bashtestmd:compare-output
 $ sleep 5
-$ curl -sS http://127.0.0.1:12346/ledger/txs/0xcafedb6e4829db3d35d8490b11a3daa107d55086250411a8ab096d3564f095b7/events | jq
+$ curl -sS http://127.0.0.1:12346/ledger/txs/0x3989ba9503b672e91eb2b93fbbd5ae83bd2bee21faf30048b5bbe501b62d4803/events | jq
 [
   {
     "type": "event",
@@ -156,7 +156,7 @@ $ curl -sS http://127.0.0.1:12346/ledger/txs/0xcafedb6e4829db3d35d8490b11a3daa10
       "type": "moduleRef",
       "name": "Bank"
     },
-    "tx_hash": "0xcafedb6e4829db3d35d8490b11a3daa107d55086250411a8ab096d3564f095b7"
+    "tx_hash": "0x3989ba9503b672e91eb2b93fbbd5ae83bd2bee21faf30048b5bbe501b62d4803"
   }
 ]
 ```
@@ -295,19 +295,24 @@ Import a transaction from a JSON file at the provided path
 Usage: sov-cli transactions import from-file <COMMAND>
 
 Commands:
-  bank                 A subcommand for the `Bank` module
-  sequencer-registry   A subcommand for the `SequencerRegistry` module
-  operator-incentives  A subcommand for the `OperatorIncentives` module
-  attester-incentives  A subcommand for the `AttesterIncentives` module
-  prover-incentives    A subcommand for the `ProverIncentives` module
-  accounts             A subcommand for the `Accounts` module
-  uniqueness           A subcommand for the `Uniqueness` module
-  chain-state          A subcommand for the `ChainState` module
-  blob-storage         A subcommand for the `BlobStorage` module
-  paymaster            A subcommand for the `Paymaster` module
-  access-pattern       A subcommand for the `AccessPattern` module
-  synthetic-load       A subcommand for the `SyntheticLoad` module
-  help                 Print this message or the help of the given subcommand(s)
+  bank                      A subcommand for the `Bank` module
+  sequencer-registry        A subcommand for the `SequencerRegistry` module
+  operator-incentives       A subcommand for the `OperatorIncentives` module
+  attester-incentives       A subcommand for the `AttesterIncentives` module
+  prover-incentives         A subcommand for the `ProverIncentives` module
+  accounts                  A subcommand for the `Accounts` module
+  uniqueness                A subcommand for the `Uniqueness` module
+  chain-state               A subcommand for the `ChainState` module
+  blob-storage              A subcommand for the `BlobStorage` module
+  paymaster                 A subcommand for the `Paymaster` module
+  revenue-share             A subcommand for the `RevenueShare` module
+  mailbox                   A subcommand for the `Mailbox` module
+  interchain-gas-paymaster  A subcommand for the `InterchainGasPaymaster` module
+  merkle-tree-hook          A subcommand for the `MerkleTreeHook` module
+  warp                      A subcommand for the `Warp` module
+  access-pattern            A subcommand for the `AccessPattern` module
+  synthetic-load            A subcommand for the `SyntheticLoad` module
+  help                      Print this message or the help of the given subcommand(s)
 
 Options:
   -h, --help  Print help
@@ -330,7 +335,7 @@ Adding the following transaction to batch:
       }
     }
   },
-  "chain_hash": "0xd185737571af2291f3d6d3337aa4143c54719d99bf25fab941af3513130df042",
+  "chain_hash": "0x6ac7496d0e70518f8368d4771e5cd3cf056e9653987ce89e5c47e01d415fbcd3",
   "details": {
     "max_priority_fee_bips": 0,
     "max_fee": "100000000",
@@ -363,20 +368,20 @@ $ ./../../target/debug/sov-cli node submit-batch --wait-for-processing by-addres
 
 ```bash,test-ci,bashtestmd:compare-output
 $ curl -Ss http://127.0.0.1:12346/modules/bank/tokens/token_1nyl0e0yweragfsatygt24zmd8jrr2vqtvdfptzjhxkguz2xxx3vs0y07u7/total-supply | jq -c -M
-{"amount":"10030000000000000","token_id":"token_1nyl0e0yweragfsatygt24zmd8jrr2vqtvdfptzjhxkguz2xxx3vs0y07u7"}
+{"amount":"25030000000000000","token_id":"token_1nyl0e0yweragfsatygt24zmd8jrr2vqtvdfptzjhxkguz2xxx3vs0y07u7"}
 ```
 
 #### 6. Wait for aggregated proof to be available
 
+
 After all transactions are submitted, let's check that aggregated proofs are available. This might take some time, because proof generation can take time and aggregated proof usually consist of several blocks.
 
 
-```bash,test-ci
-$ ./../../target/debug/sov-cli node wait-for-aggregated-proof 
- 2025-01-23T11:22:35.402610Z  INFO sov_cli::workflows::node: Executing node workflow
-2025-01-23T11:22:35.434135Z  INFO sov_cli::workflows::node: Subscribing for aggregated proofs timeout=120s
-2025-01-23T11:22:40.368366Z  INFO sov_cli::workflows::node: Aggregated proof received aggregated_proof=AggregatedProof { proof: "AAAAAAGLAQAAAAAAAAMAAAAAAAAAAQEBAQAAAAAAAAADAAAAAAAAAEhdYi6hLFLAP89xCVsbdfDdYwxF/WcFFzZGuIp+kaZW15HRe2qk3GxFnMa2Xuo0MGJo7NASojDOchgMtAoCdO1IXWIuoSxSwD/PcQlbG3Xw3WMMRf1nBRc2RriKfpGmVteR0XtqpNxsRZzGtl7qNDBiaOzQEqIwznIYDLQKAnTtwEGc5yzNex7lJXLa3zVI9FW1bv1QdAjVwddcSdTdLnbzj92WaWwpooMcl4rhSsyMSA4p2B1oOwUmM/xOuzFVUwunpBZJt+gXzHoMpgncYUhRoy6g2nn0J3Upj03dcxgzJdTBKEsCYGa+ZG26p+d6YCYTKcxA+Q8421V1spejjb0AAAAAAAAAAAMAAAAAAAAAAAAAAP6mrFuHURIPti//Z7VNLqxmrvMHx93h05TeoeAAAAAA/qasW4dREg+2L/9ntU0urGau8wfH3eHTlN6h4AAAAAD+pqxbh1ESD7Yv/2e1TS6sZq7zB8fd4dOU3qHg", type_: AggregatedProof }
+```bash,test-ci,bashtestmd:compare-output
+$ curl -fsS http://127.0.0.1:12346/ledger/aggregated-proofs/latest | jq -e -r 'if (.proof | type == "string" and length > 0) then "proof-not-empty" else error("proof is empty") end'
+proof-not-empty
 ```
+
 
 ## Disclaimer
 

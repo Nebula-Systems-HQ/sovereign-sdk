@@ -2,9 +2,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use demo_stf::runtime::Runtime;
-use sov_address::{EthereumAddress, FromVmAddress, MultiAddressEvm};
+use demo_stf::MultiAddressEvmSolana;
+use sov_address::{EthereumAddress, FromVmAddress};
 use sov_db::ledger_db::LedgerDb;
-use sov_db::storage_manager::NativeStorageManager;
+use sov_db::storage_manager::NomtStorageManager;
 use sov_ethereum::EthRpcConfig;
 use sov_mock_da::storable::StorableMockDaService;
 use sov_mock_da::MockDaSpec;
@@ -12,18 +13,22 @@ use sov_mock_zkvm::{MockCodeCommitment, MockZkvm, MockZkvmHost};
 use sov_modules_api::configurable_spec::ConfigurableSpec;
 use sov_modules_api::execution_mode::{Native, WitnessGeneration};
 use sov_modules_api::rest::StateUpdateReceiver;
-use sov_modules_api::{NodeEndpoints, Spec, Storage, SyncStatus, ZkVerifier};
+use sov_modules_api::{CryptoSpec, NodeEndpoints, Spec, SyncStatus, ZkVerifier};
 use sov_modules_rollup_blueprint::pluggable_traits::PluggableSpec;
 use sov_modules_rollup_blueprint::proof_sender::SovApiProofSender;
 use sov_modules_rollup_blueprint::{FullNodeBlueprint, RollupBlueprint, SequencerCreationReceipt};
 use sov_risc0_adapter::host::Risc0Host;
-use sov_risc0_adapter::Risc0;
-use sov_rollup_interface::zk::aggregated_proof::CodeCommitment;
+use sov_risc0_adapter::{Risc0, Risc0CryptoSpec};
+use sov_rollup_interface::da::DaSpec;
+use sov_rollup_interface::zk::aggregated_proof::CodeCommitmentHash;
 use sov_sequencer::{ProofBlobSender, Sequencer};
+use sov_state::nomt::prover_storage::NomtProverStorage;
+use sov_state::{DefaultStorageSpec, Storage};
 use sov_stf_runner::processes::{ParallelProverService, ProverService, RollupProverConfig};
 use sov_stf_runner::RollupConfig;
 
 use crate::eth_dev_signer;
+use crate::solana_offchain_endpoint::solana_offchain_router;
 
 /// Rollup with a [`ConfigurableSpec`] with [`MockDaSpec`] as Da spec, [`Risc0`] inner vm and [`MockZkvm`] for outer vm
 #[derive(Default, Clone, Copy)]
@@ -31,8 +36,20 @@ pub struct MockDemoRollup<M> {
     phantom: std::marker::PhantomData<M>,
 }
 
+type Hasher = <Risc0CryptoSpec as CryptoSpec>::Hasher;
+type NativeStorage =
+    NomtProverStorage<DefaultStorageSpec<Hasher>, <MockDaSpec as DaSpec>::SlotHash>;
+
 /// The default spec of the rollup
-pub type MockRollupSpec<M> = ConfigurableSpec<MockDaSpec, Risc0, MockZkvm, MultiAddressEvm, M>;
+pub type MockRollupSpec<M> = ConfigurableSpec<
+    MockDaSpec,
+    Risc0,
+    MockZkvm,
+    MultiAddressEvmSolana,
+    M,
+    Risc0CryptoSpec,
+    NativeStorage,
+>;
 
 impl RollupBlueprint<Native> for MockDemoRollup<Native>
 where
@@ -56,8 +73,7 @@ where
 impl FullNodeBlueprint<Native> for MockDemoRollup<Native> {
     type DaService = StorableMockDaService;
 
-    type StorageManager =
-        NativeStorageManager<MockDaSpec, <MockRollupSpec<Native> as Spec>::Storage>;
+    type StorageManager = NomtStorageManager<MockDaSpec, Hasher, NativeStorage>;
 
     type ProverService = ParallelProverService<
         <Self::Spec as Spec>::Address,
@@ -102,6 +118,7 @@ impl FullNodeBlueprint<Native> for MockDemoRollup<Native> {
         sequencer: Seq,
         rollup_config: &RollupConfig<<Self::Spec as Spec>::Address, Self::DaService>,
         shutdown_receiver: tokio::sync::watch::Receiver<()>,
+        sequencer_da_address: <MockDaSpec as sov_modules_api::DaSpec>::Address,
     ) -> anyhow::Result<NodeEndpoints>
     where
         Seq: Sequencer<Spec = Self::Spec, Rt = Self::Runtime, Da = Self::DaService>,
@@ -110,10 +127,15 @@ impl FullNodeBlueprint<Native> for MockDemoRollup<Native> {
         let eth_rpc_config = EthRpcConfig {
             eth_signer,
             extension: rollup_config.extension_or_panic(),
+            sequencer_rollup_address: rollup_config.sequencer.rollup_address,
+            sequencer_da_address,
+            sequencer_type: crate::sequencer_type(&rollup_config.sequencer),
             shutdown_receiver,
         };
+        let axum_router = solana_offchain_router(sequencer.clone());
 
         Ok(NodeEndpoints {
+            axum_router,
             jsonrpsee_module: sov_ethereum::get_ethereum_rpc(eth_rpc_config, sequencer)
                 .remove_context(),
             ..Default::default()
@@ -145,7 +167,7 @@ impl FullNodeBlueprint<Native> for MockDemoRollup<Native> {
             outer_vm,
             da_verifier,
             prover_config_discriminant,
-            CodeCommitment::default(),
+            CodeCommitmentHash::default(),
             rollup_config.proof_manager.prover_address,
         )
     }
@@ -153,8 +175,9 @@ impl FullNodeBlueprint<Native> for MockDemoRollup<Native> {
     fn create_storage_manager(
         &self,
         rollup_config: &RollupConfig<<Self::Spec as Spec>::Address, Self::DaService>,
+        witness_generation: bool,
     ) -> anyhow::Result<Self::StorageManager> {
-        NativeStorageManager::new(&rollup_config.storage.path)
+        NomtStorageManager::new(rollup_config.storage.clone(), witness_generation)
     }
 
     fn create_proof_sender(

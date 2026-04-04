@@ -14,7 +14,6 @@ use sov_modules_api::capabilities::{
 use sov_modules_api::transaction::{
     AuthenticatedTransactionData, ProverReward, RemainingFunds, SequencerReward,
 };
-use sov_modules_api::ExecutionContext;
 use sov_modules_api::HDTimestamp;
 use sov_modules_api::SequencerType;
 use sov_modules_api::{
@@ -22,6 +21,7 @@ use sov_modules_api::{
     InvalidProofError, ModuleInfo, OperatingMode, Rewards, SovAttestation,
     SovStateTransitionPublicData, Spec, StateAccessor, StateReader, StateWriter, Storage, TxState,
 };
+use sov_modules_api::{ExecutionContext, GasSpec, VersionReader};
 use sov_rollup_interface::common::SlotNumber;
 use sov_rollup_interface::zk::aggregated_proof::SerializedAggregatedProof;
 use sov_rollup_interface::Bytes;
@@ -200,7 +200,8 @@ where
         Accessor: StateReader<Kernel, Error = Infallible>
             + StateWriter<Kernel, Error = Infallible>
             + StateWriter<User, Error = Infallible>
-            + StateReader<User, Error = Infallible>,
+            + StateReader<User, Error = Infallible>
+            + VersionReader,
     >(
         &mut self,
         bond_amount: Amount,
@@ -208,7 +209,14 @@ where
         sequencer: &<S::Da as DaSpec>::Address,
         state: &mut Accessor,
     ) {
-        let mut net_amount = bond_amount.checked_sub(reward.accumulated_penalty).expect("A sequencer can never be penalized more than the amount they have escrowed, regardless of reward accumulation!");
+        // Only the preferred sequencer is allowed to bond zero tokens. After the gas limit change height, we no longer penalize the preferred sequencer.
+        let mut net_amount = if bond_amount == Amount::ZERO
+            && state.rollup_height_to_access() > <S as GasSpec>::change_gas_limit_after_height()
+        {
+            Amount::ZERO
+        } else {
+            bond_amount.checked_sub(reward.accumulated_penalty).expect("A sequencer can never be penalized more than the amount they have escrowed, regardless of reward accumulation!")
+        };
         net_amount = net_amount.checked_add(reward.accumulated_reward).expect("Total sequencer reward + escrow amount is greater than the max possible token supply. This is a bug in gas accounting.");
 
         self.sequencer_registry.add_to_stake(
@@ -246,7 +254,23 @@ impl<S: Spec, T> SequencingDataHandler<S> for StandardProvenRollupCapabilities<'
         self.chain_state
             .update_oracle_time_from_sequencing_data(data, state)
     }
+
+    #[cfg(feature = "native")]
+    fn create_sequencing_data(&self) -> Self::SequencingData {
+        use std::str::FromStr;
+        if cfg!(debug_assertions) {
+            let Ok(timestamp) = std::env::var(OVERRIDE_HD_TIMESTAMPS_ENV_VAR) else {
+                return HDTimestamp::now();
+            };
+            HDTimestamp::from_str(&timestamp).unwrap_or_else(|_| HDTimestamp::now())
+        } else {
+            HDTimestamp::now()
+        }
+    }
 }
+
+#[cfg(feature = "native")]
+const OVERRIDE_HD_TIMESTAMPS_ENV_VAR: &str = "SOV_TEST_OVERRIDE_HD_TIMESTAMPS";
 
 impl<S: Spec, T> TransactionAuthorizer<S> for StandardProvenRollupCapabilities<'_, S, T> {
     /// Prevents duplicate transactions from running.
