@@ -119,25 +119,64 @@ impl HeartBeatTask {
             PromotionEligibility::Eligible => true,
             PromotionEligibility::NotReady(SequencerNotReadyDetails::ReplicaNotReady) => {
                 match self.backend.current_leader().await {
-                    Ok(None) => {
-                        info!(
-                            node_id = %self.node_id,
-                            "No leader row present; allowing DbElected replica to bootstrap leadership while waiting for its first leader batch."
-                        );
-                        true
-                    }
+                    Ok(None) => match self.backend.sequencer_history_is_empty().await {
+                        Ok(true) => {
+                            info!(
+                                node_id = %self.node_id,
+                                "No leader row present and the shared sequencer DB is empty; allowing DbElected replica to bootstrap leadership while waiting for its first leader batch."
+                            );
+                            true
+                        }
+                        Ok(false) => {
+                            debug!(
+                                node_id = %self.node_id,
+                                "No leader row present, but the shared sequencer DB contains history; skipping leadership acquisition until the replica is promotion-ready."
+                            );
+                            false
+                        }
+                        Err(e) => {
+                            warn!(
+                                node_id = %self.node_id,
+                                error = ?e,
+                                "Failed to inspect shared sequencer history while evaluating bootstrap eligibility; skipping leadership acquisition."
+                            );
+                            false
+                        }
+                    },
                     Ok(Some(current_leader)) => {
                         if !PostgresBackend::is_leader_fresh(
                             &current_leader,
                             self.postgres_config.leader_election.leader_timeout(),
                         ) {
-                            info!(
-                                node_id = %self.node_id,
-                                leader_node_id = %current_leader.node_id,
-                                last_updated = ?current_leader.last_updated,
-                                "Only a stale leader row is present; allowing DbElected replica to bootstrap leadership while waiting for its first leader batch."
-                            );
-                            return true;
+                            match self.backend.sequencer_history_is_empty().await {
+                                Ok(true) => {
+                                    info!(
+                                        node_id = %self.node_id,
+                                        leader_node_id = %current_leader.node_id,
+                                        last_updated = ?current_leader.last_updated,
+                                        "Only a stale leader row is present and the shared sequencer DB is empty; allowing DbElected replica to bootstrap leadership while waiting for its first leader batch."
+                                    );
+                                    return true;
+                                }
+                                Ok(false) => {
+                                    debug!(
+                                        node_id = %self.node_id,
+                                        leader_node_id = %current_leader.node_id,
+                                        last_updated = ?current_leader.last_updated,
+                                        "Only a stale leader row is present, but the shared sequencer DB contains history; skipping leadership acquisition until the replica is promotion-ready."
+                                    );
+                                    return false;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        node_id = %self.node_id,
+                                        leader_node_id = %current_leader.node_id,
+                                        error = ?e,
+                                        "Failed to inspect shared sequencer history while evaluating stale-row bootstrap eligibility; skipping leadership acquisition."
+                                    );
+                                    return false;
+                                }
+                            }
                         }
                         debug!(
                             node_id = %self.node_id,
@@ -308,11 +347,15 @@ impl HeartBeatTask {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::preferred::db::BatchToStore;
+    use crate::preferred::db::DbBackend;
     use sov_full_node_configs::sequencer::LeaderElectionConfig;
+    use sov_modules_api::VisibleSlotNumber;
     use sov_test_utils::postgres::{
         config_from_postgres_container, create_postgres_container, ContainerAsync,
         CreatePostgresError, Postgres,
     };
+    use std::num::NonZero;
     use std::sync::Arc;
     use tokio::sync::{watch, Mutex};
 
@@ -364,6 +407,24 @@ mod tests {
             heartbeat_interval_millis: 25,
         };
         config
+    }
+
+    async fn create_cluster_history(config: &PostgresConfig, bind_addr: SocketAddr) {
+        let mut backend = PostgresBackend::connect(config, bind_addr).await.unwrap();
+        backend
+            .heartbeat(Some(config.leader_election))
+            .await
+            .unwrap();
+
+        let batch = BatchToStore {
+            blob_id: 42,
+            sequence_number: 1,
+            visible_slot_number_after_increase: VisibleSlotNumber::new_dangerous(1),
+            visible_slots_to_advance: NonZero::new(1).unwrap(),
+        };
+
+        backend.begin_rollup_block(batch).await.unwrap();
+        backend.end_rollup_block(batch).await.unwrap();
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -477,6 +538,58 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn test_replica_does_not_bootstrap_when_no_leader_row_exists_but_history_exists() {
+        let Some(postgres) = setup_test_postgres().await else {
+            return;
+        };
+
+        let bind_addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let history_config = postgres_config(&postgres, "history-writer").await;
+        create_cluster_history(&history_config, bind_addr).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let replica_config = postgres_config(&postgres, "replica").await;
+        let readiness_checker = TestPromotionEligibilityChecker::new(
+            PromotionEligibility::NotReady(SequencerNotReadyDetails::ReplicaNotReady),
+        );
+        let (shutdown_sender, shutdown_receiver) = watch::channel(());
+        let heartbeat_task = HeartBeatTask::new(
+            replica_config.clone(),
+            shutdown_sender.clone(),
+            bind_addr,
+            replica_config.leader_election.heartbeat_interval(),
+            Some(Arc::new(readiness_checker)),
+        )
+        .await
+        .unwrap();
+
+        let heartbeat_handle = heartbeat_task.spawn(SequencerRole::PgSyncReplica).await;
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let inspector = PostgresBackend::connect(&replica_config, bind_addr)
+            .await
+            .unwrap();
+        let current_leader = inspector.current_leader().await.unwrap().unwrap();
+        assert_eq!(current_leader.node_id, "history-writer");
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                shutdown_receiver.clone().changed()
+            )
+            .await
+            .is_err(),
+            "Replica should not restart while shared history exists and it is not promotion-ready",
+        );
+
+        shutdown_sender.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), heartbeat_handle)
+            .await
+            .expect("Timed out waiting for gated replica heartbeat task to stop")
+            .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_replica_can_bootstrap_when_only_stale_leader_row_exists() {
         let Some(postgres) = setup_test_postgres().await else {
             return;
@@ -520,5 +633,57 @@ mod tests {
             .unwrap();
         let current_leader = inspector.current_leader().await.unwrap().unwrap();
         assert_eq!(current_leader.node_id, "replica");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_replica_does_not_replace_stale_leader_row_when_history_exists() {
+        let Some(postgres) = setup_test_postgres().await else {
+            return;
+        };
+
+        let bind_addr = SocketAddr::from(([127, 0, 0, 1], 0));
+        let stale_leader_config = postgres_config(&postgres, "stale-leader").await;
+        create_cluster_history(&stale_leader_config, bind_addr).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let replica_config = postgres_config(&postgres, "replica").await;
+        let readiness_checker = TestPromotionEligibilityChecker::new(
+            PromotionEligibility::NotReady(SequencerNotReadyDetails::ReplicaNotReady),
+        );
+        let (shutdown_sender, shutdown_receiver) = watch::channel(());
+        let heartbeat_task = HeartBeatTask::new(
+            replica_config.clone(),
+            shutdown_sender.clone(),
+            bind_addr,
+            replica_config.leader_election.heartbeat_interval(),
+            Some(Arc::new(readiness_checker)),
+        )
+        .await
+        .unwrap();
+
+        let heartbeat_handle = heartbeat_task.spawn(SequencerRole::PgSyncReplica).await;
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let inspector = PostgresBackend::connect(&replica_config, bind_addr)
+            .await
+            .unwrap();
+        let current_leader = inspector.current_leader().await.unwrap().unwrap();
+        assert_eq!(current_leader.node_id, "stale-leader");
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(50),
+                shutdown_receiver.clone().changed()
+            )
+            .await
+            .is_err(),
+            "Replica should not restart while shared history exists and only a stale leader row remains",
+        );
+
+        shutdown_sender.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(2), heartbeat_handle)
+            .await
+            .expect("Timed out waiting for stale-row gated replica heartbeat task to stop")
+            .unwrap();
     }
 }

@@ -37,7 +37,7 @@ where
     async fn promotion_eligibility(&self) -> PromotionEligibility {
         match self
             .synchronized_state_updator
-            .check_readiness_msg(
+            .check_promotion_readiness_msg(
                 self.max_concurrent_blobs,
                 self.stop_at_rollup_height.clone(),
                 "db_elected_promotion_readiness",

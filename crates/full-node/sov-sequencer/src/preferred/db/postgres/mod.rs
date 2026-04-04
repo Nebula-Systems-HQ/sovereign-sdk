@@ -29,6 +29,7 @@ pub(crate) use sov_full_node_configs::sequencer::LeaderElectionConfig;
 pub(crate) struct SequencerLeader {
     pub(crate) node_id: String,
     pub(crate) last_updated: OffsetDateTime,
+    pub(crate) leader_acquired_at: OffsetDateTime,
 }
 
 pub struct PostgresBackend {
@@ -240,6 +241,32 @@ impl PostgresBackend {
         }))
     }
 
+    /// Returns whether the shared sequencer database has any persisted batch history.
+    ///
+    /// Unlike `current_data`, this helper is safe to call from replicas because it
+    /// does not require the caller to hold leadership.
+    pub(crate) async fn sequencer_history_is_empty(&self) -> anyhow::Result<bool> {
+        run_with_retries!(
+            &self.backoff_policy,
+            self.sequencer_history_is_empty_in_tx(),
+            "postgres_db_backend_sequencer_history_is_empty"
+        )
+    }
+
+    async fn sequencer_history_is_empty_in_tx(&self) -> anyhow::Result<bool> {
+        let mut tx: sqlx::Transaction<'_, Postgres> = self.pool.begin().await?;
+        let has_events: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM events)")
+            .fetch_one(&mut *tx)
+            .await?;
+        let has_in_progress_batch: bool =
+            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM in_progress_batch)")
+                .fetch_one(&mut *tx)
+                .await?;
+        tx.commit().await?;
+
+        Ok(!has_events && !has_in_progress_batch)
+    }
+
     /// Returns the current leader row, if any, without attempting to claim leadership.
     pub(crate) async fn current_leader(&self) -> anyhow::Result<Option<SequencerLeader>> {
         run_with_retries!(
@@ -259,6 +286,14 @@ impl PostgresBackend {
     pub(crate) fn is_leader_fresh(leader: &SequencerLeader, leader_timeout: Duration) -> bool {
         let timeout = time::Duration::try_from(leader_timeout).unwrap_or(time::Duration::MAX);
         leader.last_updated >= OffsetDateTime::now_utc() - timeout
+    }
+
+    pub(crate) fn can_resume_leadership_after_restart(
+        leader: &SequencerLeader,
+        grace_period: Duration,
+    ) -> bool {
+        let grace_period = time::Duration::try_from(grace_period).unwrap_or(time::Duration::MAX);
+        leader.last_updated >= OffsetDateTime::now_utc() - grace_period
     }
 
     /// Sends a heartbeat to update this node's registration and optionally compete for leadership.
@@ -335,7 +370,7 @@ impl PostgresBackend {
                             sequencer_leader.last_updated < EXCLUDED.last_updated - ($2 * INTERVAL '1 millisecond')
                             AND sequencer_leader.leader_acquired_at < EXCLUDED.last_updated - ($3 * INTERVAL '1 millisecond')
                         )
-                    RETURNING node_id, last_updated",
+                    RETURNING node_id, last_updated, leader_acquired_at",
         )
         .bind(&self.node_id)
         .bind(leader_timeout)
@@ -401,7 +436,7 @@ impl PostgresBackend {
         connection: &mut PgConnection,
     ) -> Result<Option<SequencerLeader>, sqlx::Error> {
         let maybe_leader: Option<SequencerLeader> = sqlx::query_as::<_, SequencerLeader>(
-            "SELECT node_id, last_updated
+            "SELECT node_id, last_updated, leader_acquired_at
                 FROM sequencer_leader
                 WHERE singleton = 1",
         )

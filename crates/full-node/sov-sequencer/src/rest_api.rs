@@ -469,9 +469,7 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
             tracing::warn!(?details, ?role, "Node is not ready");
             return Err(sov_rest_utils::ErrorObject {
                 status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                message: format!(
-                    "Node (role: {role:?}) is not ready: {details:?}"
-                ),
+                message: format!("Node (role: {role:?}) is not ready: {details:?}"),
                 details: Default::default(),
             }
             .into_response());
