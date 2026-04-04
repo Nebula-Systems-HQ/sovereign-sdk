@@ -2,9 +2,9 @@
 mod tests;
 
 use crate::preferred::db::FailedOperation;
+use crate::PreferredProofDataBytes;
 use anyhow::{anyhow, Result};
 use std::net::{IpAddr, SocketAddr};
-use std::sync::Arc;
 use std::time::Duration;
 
 use super::{DbBackend, ReadBlob, SnapshotData, StoredBlob};
@@ -156,7 +156,7 @@ impl PostgresBackend {
             StoredBlob::Proof { data, blob_id } => Ok(ReadBlob::Proof {
                 sequence_number,
                 blob_id,
-                data,
+                data: PreferredProofDataBytes(data), // Note: This is the same type that we stored initially. See `add_proof_blob`.
             }),
         }
     }
@@ -211,12 +211,17 @@ impl PostgresBackend {
             });
         }
 
-        let completed_blobs_metadata: Vec<(i64, Vec<u8>)> =
-            sqlx::query_as::<Postgres, _>(
-                "SELECT sequence_number, data FROM events WHERE event_type = 'batch_end' ORDER BY sequence_number",
-            )
-            .fetch_all(&mut *tx)
-            .await?;
+        let completed_blobs_metadata: Vec<(i64, Vec<u8>)> = sqlx::query_as::<Postgres, _>(
+            "SELECT e.sequence_number, COALESCE(e.data, p.borsh_value) AS data
+             FROM events e
+             LEFT JOIN proof_blobs p
+               ON p.sequence_number = e.sequence_number
+              AND e.event_type = 'new_proof'
+             WHERE e.event_type IN ('batch_end', 'new_proof')
+             ORDER BY e.sequence_number",
+        )
+        .fetch_all(&mut *tx)
+        .await?;
 
         // Fill out completed blobs with transaction data
         let mut completed_blobs = Vec::new();
@@ -665,9 +670,12 @@ impl DbBackend for PostgresBackend {
         &mut self,
         sequence_number: SequenceNumber,
         blob_id: BlobInternalId,
-        data: Arc<[u8]>,
+        data: PreferredProofDataBytes,
     ) -> Result<(), DbError> {
-        let blob_data = borsh::to_vec(&StoredBlob::Proof { data, blob_id })?;
+        let blob_data = borsh::to_vec(&StoredBlob::Proof {
+            data: data.0,
+            blob_id,
+        })?;
 
         // Compound CTE statement to avoid multiple roundtrips
         let result = run_with_retries!(

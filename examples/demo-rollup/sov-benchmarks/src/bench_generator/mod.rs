@@ -10,10 +10,11 @@ use demo_stf::runtime::{GenesisConfig, Runtime, RuntimeCall};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sov_address::{EthereumAddress, FromVmAddress};
+use sov_hyperlane_integration::HyperlaneAddress;
 use sov_modules_api::prelude::arbitrary;
 use sov_modules_api::prelude::arbitrary::Unstructured;
+use sov_modules_api::Base58Address;
 use sov_modules_api::Spec;
-use sov_risc0_adapter::Risc0;
 use sov_transaction_generator::generators::basic::{
     BasicCallMessageFactory, BasicChangeLogEntry, BasicModuleRef, BasicTag,
 };
@@ -21,7 +22,7 @@ use sov_transaction_generator::{
     rng_utils, Distribution, GeneratedMessage, MessageValidity, State,
 };
 
-use crate::BenchSpec;
+use crate::BenchRisc0Spec;
 
 type BenchmarkModule<S> = BasicModuleRef<S, Runtime<S>>;
 type BenchmarkMessageFactory<S> = BasicCallMessageFactory<S, Runtime<S>>;
@@ -34,7 +35,7 @@ pub const DEFAULT_RANDOMIZATION_BUFFER_SIZE: u64 = 10_000_000;
 pub const MAX_GEN_ATTEMPTS: u64 = 10;
 
 pub type GeneratedBatch<S> = Vec<GeneratedMessage<S, RuntimeCall<S>, BasicChangeLogEntry<S>>>;
-pub type S = BenchSpec<Risc0>;
+pub type S = BenchRisc0Spec;
 pub type RT = Runtime<S>;
 
 #[allow(clippy::large_enum_variant)]
@@ -42,7 +43,7 @@ pub type RT = Runtime<S>;
 #[serde(bound = "S: Spec", rename_all = "snake_case")]
 pub enum BenchmarkData<S: Spec>
 where
-    S::Address: FromVmAddress<EthereumAddress>,
+    S::Address: FromVmAddress<EthereumAddress> + FromVmAddress<Base58Address> + HyperlaneAddress,
 {
     Genesis(GenesisConfig<S>),
     Initialization(GeneratedBatch<S>),
@@ -56,7 +57,7 @@ where
 #[derive(Clone)]
 pub struct Benchmark<S: Spec>
 where
-    S::Address: FromVmAddress<EthereumAddress>,
+    S::Address: FromVmAddress<EthereumAddress> + FromVmAddress<Base58Address> + HyperlaneAddress,
 {
     /// The name of the benchmark.
     pub name: String,
@@ -80,7 +81,7 @@ where
 
 impl<S: Spec> Benchmark<S>
 where
-    S::Address: FromVmAddress<EthereumAddress>,
+    S::Address: FromVmAddress<EthereumAddress> + FromVmAddress<Base58Address> + HyperlaneAddress,
     S: Serialize + DeserializeOwned,
 {
     /// Generates the benchmark messages for a given batch.
@@ -216,23 +217,22 @@ mod tests {
     use std::sync::Arc;
 
     use demo_stf::genesis_config::EvmGenesisConfig;
-    use sov_address::MultiAddress;
+    use demo_stf::MultiAddressEvmSolana;
     use sov_modules_api::Address;
     use sov_test_modules::access_pattern::AccessPatternGenesisConfig;
     use sov_test_utils::runtime::genesis::zk::config::{
         HighLevelZkGenesisConfig, MinimalZkGenesisConfig,
     };
     use sov_test_utils::runtime::sov_bank::CallMessageDiscriminants as BankDiscriminants;
-    use sov_test_utils::MockZkvm;
     use sov_transaction_generator::generators::bank::BankMessageGenerator;
     use sov_transaction_generator::generators::basic::BasicBankHarness;
     use sov_transaction_generator::Percent;
     use tempfile::tempfile;
 
     use super::*;
-    use crate::BenchSpec;
+    use crate::NomtBenchSpec;
 
-    type S = BenchSpec<MockZkvm>;
+    type S = NomtBenchSpec;
 
     #[test]
     fn serialize_deserialize_works() {
@@ -263,10 +263,10 @@ mod tests {
             initial_randomization_buffer_size: DEFAULT_RANDOMIZATION_BUFFER_SIZE,
             genesis_config: GenesisConfig::from_minimal_config(
                 MinimalZkGenesisConfig::from(HighLevelZkGenesisConfig::generate_with_additional_accounts_and_code_commitments(0, Default::default(), Default::default())),
-                EvmGenesisConfig::default_with_admin(MultiAddress::Standard(Address::from_const_slice([0; 28]))),
+                EvmGenesisConfig::default_with_admin(MultiAddressEvmSolana::Standard(Address::from_const_slice([0; 28]))),
                 Default::default(),
                 AccessPatternGenesisConfig {
-                    admin: MultiAddress::Standard(Address::from_const_slice([0; 28])),
+                    admin: MultiAddressEvmSolana::Standard(Address::from_const_slice([0; 28])),
                 }
             ),
         };

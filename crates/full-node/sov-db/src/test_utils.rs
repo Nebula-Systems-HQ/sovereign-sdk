@@ -1,5 +1,3 @@
-#[cfg(test)]
-use std::any::Any;
 use std::cmp::max;
 use std::collections::HashSet;
 
@@ -76,8 +74,8 @@ impl crate::storage_manager::InitializableNativeNomtStorage<H, SlotHash> for Tes
         state_session_builder: crate::state_db_nomt::NomtSessionBuilder<H, SlotHash>,
         historical_state: crate::historical_state::HistoricalStateReader,
         accessory_db: AccessoryDb,
-        _with_witness: bool,
-        _pinned_cache: Option<Box<dyn Any + Send + Sync>>,
+        _strict_mode: bool,
+        _witness_mode: crate::storage_manager::WitnessMode,
     ) -> Self {
         TestNomtStorage {
             state_session_builder,
@@ -321,17 +319,28 @@ impl CrashLocation {
 
     /// if `CRASH_ENV_NAME` is set to self, the method will panic.
     pub fn crash_if_env_set(&self) {
-        if cfg!(debug_assertions) {
-            if let Ok(env) = std::env::var(CRASH_ENV_NAME) {
-                let crash_location: CrashLocation = env.parse().unwrap();
+        if self.is_crash_env_set() {
+            tracing::error!("{CRASH_ENV_NAME} is set to: {self}, crashing the node");
+            panic!("{CRASH_ENV_NAME} is set to: {self}, crashing the node");
+        }
+    }
 
-                if &crash_location == self {
-                    tracing::error!(
-                        "{CRASH_ENV_NAME} is set to: {crash_location}, crashing the node"
-                    );
-                    panic!("{CRASH_ENV_NAME} is set to: {crash_location}, crashing the node");
-                }
+    /// Returns true if `SOV_CRASH_ON_COMMIT` is set to this crash location.
+    ///
+    /// # Panics
+    /// Panics if `SOV_CRASH_ON_COMMIT` is set to a value that cannot be parsed as a `CrashLocation`.
+    pub fn is_crash_env_set(&self) -> bool {
+        if !cfg!(debug_assertions) {
+            return false;
+        }
+        match std::env::var(CRASH_ENV_NAME) {
+            Ok(env) => {
+                let crash_location: CrashLocation = env.parse().unwrap_or_else(|e| {
+                    panic!("Failed to parse {CRASH_ENV_NAME}={env:?} as CrashLocation: {e}")
+                });
+                &crash_location == self
             }
+            Err(_) => false,
         }
     }
 }

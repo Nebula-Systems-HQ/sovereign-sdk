@@ -14,7 +14,7 @@ use sov_mock_da::{
     BlockProducingConfig, FailureBehavior, MockAddress, MockBlob, MockBlock, MockBlockHeader,
     MockDaConfig, MockDaService, MockDaSpec, RandomizationBehaviour, RandomizationConfig,
 };
-use sov_mock_zkvm::MockZkvm;
+
 use sov_modules_api::provable_height_tracker::InfiniteHeight;
 use sov_modules_api::{FullyBakedTx, StateTransitionFunction};
 use sov_rollup_interface::node::da::{DaService, SlotData};
@@ -29,7 +29,7 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 
-type MockInitVariant = InitVariant<HashStf, MockZkvm, MockZkvm, MockDaService>;
+type MockInitVariant = InitVariant<HashStf, MockDaService>;
 
 const STANDARD_SENDER: MockAddress = MockAddress::new([0u8; 32]);
 const TREE_MINUTES: std::time::Duration = std::time::Duration::from_secs(60 * 3);
@@ -65,9 +65,10 @@ async fn test_runner_with_background_da_service(
 
     let stf = HashStf::new();
 
-    let mut storage_manager = NomtStorageManager::new(RollupDbConfig::default_in_path(
-        tempdir.path().to_path_buf(),
-    ))?;
+    let mut storage_manager = NomtStorageManager::new(
+        RollupDbConfig::default_in_path(tempdir.path().to_path_buf()),
+        false,
+    )?;
 
     let block = da_service.get_block_at(0).await?;
     let genesis_header = block.header().clone();
@@ -397,7 +398,7 @@ fn get_saved_root_hash(
     path: &std::path::Path,
 ) -> anyhow::Result<Option<<TestStorage as Storage>::Root>> {
     let config = RollupDbConfig::default_in_path(path.to_path_buf());
-    let mut storage_manager = TestStorageManager::new(config)?;
+    let mut storage_manager = TestStorageManager::new(config, false)?;
     let mock_block_header = MockBlockHeader::from_height(1000000);
     let (stf_state, ledger_state) = storage_manager.create_state_for(&mock_block_header)?;
 
@@ -441,7 +442,7 @@ fn get_result_from_blocks(
     let stf = HashStf::new();
 
     let (genesis_state_root, change_set) =
-        <HashStf as StateTransitionFunction<MockZkvm, MockZkvm, MockDaSpec>>::init_chain(
+        <HashStf as StateTransitionFunction<MockDaSpec>>::init_chain(
             &stf,
             &Default::default(),
             storage,
@@ -455,16 +456,15 @@ fn get_result_from_blocks(
         let mut relevant_blobs = block.as_relevant_blobs();
 
         let storage = storage_manager.create_storage();
-        let result =
-            <HashStf as StateTransitionFunction<MockZkvm, MockZkvm, MockDaSpec>>::apply_slot(
-                &stf,
-                &state_root,
-                storage,
-                ArrayWitness::default(),
-                &block.header,
-                relevant_blobs.as_iters(),
-                sov_modules_api::ExecutionContext::Node,
-            );
+        let result = <HashStf as StateTransitionFunction<MockDaSpec>>::apply_slot(
+            &stf,
+            &state_root,
+            storage,
+            ArrayWitness::default(),
+            &block.header,
+            relevant_blobs.as_iters(),
+            sov_modules_api::ExecutionContext::Node,
+        );
 
         state_root = result.state_root;
         storage_manager.commit(result.change_set);

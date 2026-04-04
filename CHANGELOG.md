@@ -1,24 +1,96 @@
+# 2026-04-02
+- #2683 Removes JMT based rollup from demo-rollup examples. JMT-based storage is still available in sov-state.
+
+# 2026-04-01
+- #2670 **Breaking change** Remove `InnerVm` and `OuterVm` generic type parameters from `StateTransitionFunction` trait and all downstream types.
+
+# 2026-03-30
+- #2651 Updates in rust dependencies. Manual update of `serde_with` is required with `cargo update serde_with`
+- #2629 Sequencer: Replica rejects batch starts that outrun the executor rebase window. `STATE_ROOT_DELAY_BLOCKS` was increased from 3 to 5 in `constants.toml`.
+- #2654 Replace `lazy_static` crate with `std::sync::LazyLock`
+- #2675 Upgrades `rockbound` version, with some dependency clean up. `prometheus_exporter` is removed from `demo-rollup`
+- #2671 Fixes API archival query race condition
+- #2613 Adds two new constants: CHANGE_GAS_LIMIT_AFTER_HEIGHT and UPDATED_GAS_LIMIT. If your rollup does not need to update its gas limit, set these values to i64::MAX and your existing gas limit, respectively.
+- #2658 (Non-breaking) Add multisig support to the sov-solana-offchain-authenticator, but only when using simple signing (i.e. multisigs are not yet supported with Ledger wallets).
+
+# 2026-03-24
+- #2620 Adds proptests for checking consistency between simulation endpoints and sendRawTransaction
+- #2626 EVM: Fixes estimateGas value to match what will end up in the receipt of actually executed transaction
+- #2634 Test only changes
+- #2631 Reorganize and extend demo-stf
+
+# 2026-03-16
+- #2592 Fixes EVM RPC regression for paymaster enabled rollups
+- #2598 Fixes EVM RPC omitted gas limit for simulation endpoints
+- #2599 Make EVM RPC affordances checks paymaster-aware
+- #2621 EVM: Fix feeHistory endpoint for zero blocks
+
+# 2026-03-13
+- #2587 EVM: RPC only: Fixes Fee-cap admission consistency across simulation and submission.
+
+# 2026-03-10
+- #2569 **Breaking change** Updated the `SP1Host` and `SP1Verifier` implementations to support SP1 v6. `ZkvmHost::code_commitment` now returns a Result, which is a breaking change.
+- #2554 **Breaking change** Updated the `SP1Host` and `SP1Verifier` implementations to support SP1 v6. `ZkvmHost::code_commitment` now returns a Result, which is a breaking change.
+
+# 2026-03-05
+- #2554 More stabilization in demo-rollup EVM tests
+- #2556 **Breaking change**: only for runtimes with AccessPattern module.
+- #2548 Updates sp1 to v6.
+
+# 2026-02-12
+- #2482 **Breaking change**: HasCapabilities now requires the `SequencerData` associated type that was previously specified on the implementation of SequencingDataHandler.
+
+# 2026-02-09
+- #2459 Fixes in EVM RPC `eth_estimateGas` and `eth_getStorageAt`
+
+# 2026-03-02
+- #2543 **Breaking change: code** Adds a new constants.toml value `ENABLE_TIMESTAMP_ORACLE_AT` which disables setting the on-chain timestamp oracle metadata from the sequencer context before the provided height. Should be set to 0 for new chains, and some height after the upgrade for existing chains. Alternatively set to `i64::MAX` to effectively disable it.
+- #2547 Updating EVM tests and test-only sequencer change.
+
+# 2026-02-24 
+- #2512 adds the capability to migrate from mockDa -> Celestia to the demo rollup.
+
+# 2026-02-26
+- #2540 Adds a witness generation flag. If witness generation is enabled at the same time as cache pinning a panic with occur at runtime.
+
+# 2026-02-23
+- #2520 reverts #2489
+- #2506 EVM: Fixes RPC endpoints and adds base for hive and rpc compat tests
+- #2532 EVM: Minor fixes in RPC endpoints
+
 # 2026-02-17
 - #2493 **Infra only breaking change**: CelestiaConfig `rpc_url` param is now mandatory. Please don't rely on previous default value and provide explicit value.
   You can use `SOV_CELESTIA_RPC_URL` for setup.
+- #2500 EVM: Fixes the nonce used for simulation endpoints
 - #2499 EVM: Add block-pinned state isolation tests for all 6 RPC endpoints
 - #2495 Updates examples configs
+
+# 2026-02-12
+- #2482 **Breaking change**: HasCapabilities now requires the `SequencerData` associated type that was previously specified on the implementation of SequencingDataHandler.
 
 # 2026-02-09
 - #2459 Fixes in EVM RPC `eth_estimateGas` and `eth_getStorageAt`
 - #2458 **Infra only breaking change**: for EVM rollups only: added new constant `EVM_RECEIPT_ACTUAL_FEE_HEIGHT` that should be set to 0 for new rollups, or some future height for existing rollups.
 
 # 2026-01-29
-- #2418 **Breaking change** = StandardSchemaEndpoint's constructor now requires a state checkpoint receiver. This PR adds chain hash override support in `constants.toml` for non-breaking schema upgrades. Overrides specify height ranges with optional grace periods where both old and new hashes are accepted. The `/rollup/schema` endpoint now dynamically returns the correct chain hash for the current height.
+- #2418 **Breaking change**: StandardSchemaEndpoint's constructor now requires a state checkpoint receiver. This PR adds chain hash override support in `constants.toml` for non-breaking schema upgrades. Overrides specify height ranges with optional grace periods where both old and new hashes are accepted. The `/rollup/schema` endpoint now dynamically returns the correct chain hash for the current height.
+
 # 2026-02-10
 - #2462 EVM: Include `base_fee` in Transaction RPC response.
 # 2026-02-12
 - #2476 EVM: Fix `eth_getBlockByNumber` to return correct the same block as `eth_getBlockByNumnber(latest)` for RPC cross endpoint consistency
 - #2463 **Breaking change**: EVM now returns actual non-zero value for BASEFEE opcode.
   Any EVM rollup that had transactions that relied on this opcode will have consensus breaking change.
+# 2026-02-10
+- #2462 EVM: Include `base_fee` in Transaction RPC response.
+- #2460 Internal sov-demo-rollup updates to support Solana-based signing. Can be used as an example of integrating combined Solana and Ethereum authentication into a single rollup.
 
 # 2026-02-09
 - #2459 Fixes in EVM RPC `eth_estimateGas` and `eth_getStorageAt`
+
+# 2026-01-29
+- #2418 **Breaking change** = StandardSchemaEndpoint's constructor now requires a state checkpoint receiver. This PR adds chain hash override support in `constants.toml` for non-breaking schema upgrades. Overrides specify height ranges with optional grace periods where both old and new hashes are accepted. The `/rollup/schema` endpoint now dynamically returns the correct chain hash for the current height.
+
 # 2026-02-03
 - #2391 EVM: Add RPC compatibility tests for eth_getBlockByNumber and eth_getBlockByHash
 - #2433 Updates tests in sov-demo-rollup.
@@ -206,6 +278,7 @@ The purpose of this change is to enable rollups to accept transactions signed wi
 - #1897 Fix gas estimation for transactions with many logs by charging for log storage in receipts.
 - #1893 Removes wrapper `Transaction` structure. Now `Transaction` is a enum of versions directly.
         This was done because there's no guarantees that any field will remain common across all transaction versions (which was the original motiviation for this design).
+- #1916 Changes demo-rollup to use NOMT storage by default.
 
 # 2025-10-16
 - #1878 Add EVM logs soak test

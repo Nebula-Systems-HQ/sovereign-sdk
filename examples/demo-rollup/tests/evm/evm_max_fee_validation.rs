@@ -97,7 +97,7 @@ async fn test_max_fee_check_height_is_respected() -> anyhow::Result<()> {
     .await;
 
     // Advance past the threshold (height 15)
-    rollup.wait_for_next_blocks(20).await;
+    rollup.wait_for_rollup_height_advance_by(20).await;
 
     // After threshold: low fee should fail, high fee should pass
     send_tx_expect_failure(
@@ -119,7 +119,7 @@ async fn test_max_fee_check_height_is_respected() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn test_big_call_data() {
     let (rollup, client) = setup().await;
-    rollup.wait_for_next_blocks(1).await;
+    rollup.wait_for_rollup_height_advance_by(1).await;
     let mut tx = TransactionRequest::default().with_to(Address::ZERO);
 
     tx.input = TransactionInput {
@@ -156,13 +156,14 @@ async fn send_tx_expect_success(client: &DynProvider, fee: u128, msg: &str) {
     assert!(receipt.status(), "{msg}");
 }
 
-/// Sends a transaction and asserts it fails with "Insufficient max_fee_per_gas"
+/// Sends a transaction and asserts it fails for the expected low fee-cap reason.
 async fn send_tx_expect_failure(client: &DynProvider, fee: u128, msg: &str) {
     let tx_request = create_tx_request(client, fee).await.unwrap();
     let err = client.send_transaction(tx_request).await.unwrap_err();
     let err_msg = err.to_string();
     assert!(
-        err_msg.contains("Insufficient max_fee_per_gas"),
+        err_msg.contains("max fee per gas less than block base fee")
+            || err_msg.contains("Insufficient max_fee_per_gas"),
         "{msg}: got {err_msg}"
     );
 }

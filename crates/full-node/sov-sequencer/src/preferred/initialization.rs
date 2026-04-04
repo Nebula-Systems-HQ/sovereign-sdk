@@ -7,6 +7,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use sov_db::ledger_db::LedgerDb;
 use sov_full_node_configs::sequencer::ConfiguredNodeRole;
+use sov_modules_api::capabilities::SequencerRemuneration;
 use sov_modules_api::rest::StateUpdateReceiver;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -101,6 +102,10 @@ where
             .await
             .context("Sequencer must have DaService configured with submit support")?;
 
+        // Early check: verify that this node's DA signer matches the preferred
+        // sequencer registered in the runtime.
+        Self::check_runtime_address_match(&latest_state_update, da_address)?;
+
         debug!(
             ?latest_state_update,
             %da_address,
@@ -130,7 +135,7 @@ where
         let (blob_sender, blob_sender_handle) = PreferredBlobSender::new(
             self.da,
             ledger_db.clone(),
-            db_cache.all_completed_blobs().clone(),
+            db_cache.all_proofs_and_completed_blobs().clone(),
             storage_path.into(),
             tx_status_manager.clone(),
             shutdown_sender.clone(),
@@ -211,6 +216,10 @@ where
         let test_only_state_update_notification_receiver = synchronized_state
             .test_only_state_update_notification_sender
             .subscribe();
+        #[cfg(feature = "test-utils")]
+        let test_only_state_update_notification_sender = synchronized_state
+            .test_only_state_update_notification_sender
+            .clone();
         let synchronized_state_task = synchronized_state.start().await;
         handles.push(synchronized_state_task);
 
@@ -257,6 +266,8 @@ where
             tx_queue_id,
             stop_at_rollup_height,
             test_only_state_update_notification_receiver,
+            #[cfg(feature = "test-utils")]
+            test_only_state_update_notification_sender,
             test_only_forced_tx_batch_notification_receiver: forced_tx_batch_notifier.subscribe(),
             runtime: Rt::default(),
         }));
@@ -321,6 +332,35 @@ where
         Ok((seq, handles))
     }
 
+    fn check_runtime_address_match(
+        latest_state_update: &StateUpdateInfo<<S as Spec>::Storage>,
+        da_address: <<S as Spec>::Da as DaSpec>::Address,
+    ) -> anyhow::Result<()> {
+        let mut runtime: Rt = Default::default();
+        let mut checkpoint =
+            StateCheckpoint::new(latest_state_update.storage.clone(), &runtime.kernel(), None);
+        let registry_preferred = runtime
+            .sequencer_remuneration()
+            .preferred_sequencer(&mut checkpoint);
+        match registry_preferred {
+            Some(ref expected) if *expected == da_address => Ok(()),
+            Some(expected) => {
+                anyhow::bail!(
+                        "DA address mismatch: this node's DaService signer address is {da_address}, \
+                         but the preferred sequencer DA address in the sequencer registry is {expected}. \
+                         Check your DA service configuration."
+                    );
+            }
+            None => {
+                anyhow::bail!(
+                    "No preferred sequencer is registered in the sequencer registry, \
+                         but this node is configured as a preferred sequencer. \
+                         Check the sequencer registry genesis configuration."
+                );
+            }
+        }
+    }
+
     fn api_state(
         storage: S::Storage,
     ) -> (
@@ -329,9 +369,9 @@ where
     ) {
         let mut runtime: Rt = Default::default();
         assert!(
-                accepts_preferred_batches(runtime.blob_selector()),
-                "Attempting to use preferred sequencer with an incompatible rollup. Set your sequencer config to `standard` in your rollup's config.toml file or change your kernel to be compatible with soft confirmations."
-            );
+            accepts_preferred_batches(runtime.blob_selector()),
+            "Attempting to use preferred sequencer with an incompatible rollup. Set your sequencer config to `standard` in your rollup's config.toml file or change your kernel to be compatible with soft confirmations."
+        );
         let checkpoint = StateCheckpoint::new(storage, &runtime.kernel(), None);
         // Preferred sequencer deliberately treats the latest available slot as finalized
         // when initializing API state (soft-confirmation semantics).

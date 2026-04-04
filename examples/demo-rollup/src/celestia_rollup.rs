@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use demo_stf::runtime::Runtime;
-use sov_address::{EthereumAddress, FromVmAddress, MultiAddressEvm};
+use demo_stf::MultiAddressEvmSolana;
+use sov_address::{EthereumAddress, FromVmAddress};
 use sov_celestia_adapter::verifier::{CelestiaSpec, CelestiaVerifier, RollupParams};
 use sov_celestia_adapter::CelestiaService;
 use sov_db::ledger_db::LedgerDb;
-use sov_db::storage_manager::NativeStorageManager;
+use sov_db::storage_manager::NomtStorageManager;
 use sov_ethereum::EthRpcConfig;
 use sov_mock_zkvm::{MockCodeCommitment, MockZkvm, MockZkvmHost};
 use sov_modules_api::configurable_spec::ConfigurableSpec;
@@ -19,23 +20,39 @@ use sov_modules_rollup_blueprint::{
     FullNodeBlueprint, RollupBlueprint, SequencerCreationReceipt, WalletBlueprint,
 };
 use sov_risc0_adapter::host::Risc0Host;
-use sov_risc0_adapter::Risc0;
-use sov_rollup_interface::da::DaVerifier;
+use sov_risc0_adapter::{Risc0, Risc0CryptoSpec};
+use sov_rollup_interface::da::{DaSpec, DaVerifier};
 use sov_rollup_interface::execution_mode::WitnessGeneration;
-use sov_rollup_interface::zk::aggregated_proof::CodeCommitment;
+use sov_rollup_interface::zk::aggregated_proof::CodeCommitmentHash;
+use sov_rollup_interface::zk::CryptoSpec;
 use sov_sequencer::{ProofBlobSender, Sequencer};
+use sov_state::nomt::prover_storage::NomtProverStorage;
+use sov_state::DefaultStorageSpec;
 use sov_stf_runner::processes::{ParallelProverService, ProverService, RollupProverConfig};
 use sov_stf_runner::RollupConfig;
 
+use crate::solana_offchain_endpoint::solana_offchain_router;
 use crate::{eth_dev_signer, ROLLUP_BATCH_NAMESPACE, ROLLUP_PROOF_NAMESPACE};
 
 /// Rollup with CelestiaDa
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 pub struct CelestiaDemoRollup<M> {
     phantom: std::marker::PhantomData<M>,
 }
 
-type CelestiaRollupSpec<M> = ConfigurableSpec<CelestiaSpec, Risc0, MockZkvm, MultiAddressEvm, M>;
+type Hasher = <Risc0CryptoSpec as CryptoSpec>::Hasher;
+type NativeStorage =
+    NomtProverStorage<DefaultStorageSpec<Hasher>, <CelestiaSpec as DaSpec>::SlotHash>;
+
+type CelestiaRollupSpec<M> = ConfigurableSpec<
+    CelestiaSpec,
+    Risc0,
+    MockZkvm,
+    MultiAddressEvmSolana,
+    M,
+    Risc0CryptoSpec,
+    NativeStorage,
+>;
 
 impl RollupBlueprint<Native> for CelestiaDemoRollup<Native>
 where
@@ -51,7 +68,7 @@ where
     CelestiaRollupSpec<WitnessGeneration>: PluggableSpec,
     <CelestiaRollupSpec<WitnessGeneration> as Spec>::Address: FromVmAddress<EthereumAddress>,
 {
-    type Spec = CelestiaRollupSpec<Native>;
+    type Spec = CelestiaRollupSpec<WitnessGeneration>;
     type Runtime = Runtime<Self::Spec>;
 }
 
@@ -59,8 +76,7 @@ where
 impl FullNodeBlueprint<Native> for CelestiaDemoRollup<Native> {
     type DaService = CelestiaService;
 
-    type StorageManager =
-        NativeStorageManager<CelestiaSpec, <CelestiaRollupSpec<Native> as Spec>::Storage>;
+    type StorageManager = NomtStorageManager<CelestiaSpec, Hasher, NativeStorage>;
 
     type ProverService = ParallelProverService<
         <Self::Spec as Spec>::Address,
@@ -121,6 +137,7 @@ impl FullNodeBlueprint<Native> for CelestiaDemoRollup<Native> {
         sequencer: Seq,
         rollup_config: &RollupConfig<<Self::Spec as Spec>::Address, Self::DaService>,
         shutdown_receiver: tokio::sync::watch::Receiver<()>,
+        sequencer_da_address: <CelestiaSpec as sov_modules_api::DaSpec>::Address,
     ) -> anyhow::Result<NodeEndpoints>
     where
         Seq: Sequencer<Spec = Self::Spec, Rt = Self::Runtime, Da = Self::DaService>,
@@ -129,10 +146,15 @@ impl FullNodeBlueprint<Native> for CelestiaDemoRollup<Native> {
         let eth_rpc_config = EthRpcConfig {
             eth_signer,
             extension: rollup_config.extension_or_panic(),
+            sequencer_rollup_address: rollup_config.sequencer.rollup_address,
+            sequencer_da_address,
+            sequencer_type: crate::sequencer_type(&rollup_config.sequencer),
             shutdown_receiver,
         };
+        let axum_router = solana_offchain_router(sequencer.clone());
 
         Ok(NodeEndpoints {
+            axum_router,
             jsonrpsee_module: sov_ethereum::get_ethereum_rpc(eth_rpc_config, sequencer)
                 .remove_context(),
             ..Default::default()
@@ -162,7 +184,7 @@ impl FullNodeBlueprint<Native> for CelestiaDemoRollup<Native> {
             outer_vm,
             da_verifier,
             prover_config_disc,
-            CodeCommitment::default(),
+            CodeCommitmentHash::default(),
             rollup_config.proof_manager.prover_address,
         )
     }
@@ -170,8 +192,9 @@ impl FullNodeBlueprint<Native> for CelestiaDemoRollup<Native> {
     fn create_storage_manager(
         &self,
         rollup_config: &RollupConfig<<Self::Spec as Spec>::Address, Self::DaService>,
+        witness_generation: bool,
     ) -> anyhow::Result<Self::StorageManager> {
-        NativeStorageManager::new(&rollup_config.storage.path)
+        NomtStorageManager::new(rollup_config.storage.clone(), witness_generation)
     }
 
     fn create_proof_sender(

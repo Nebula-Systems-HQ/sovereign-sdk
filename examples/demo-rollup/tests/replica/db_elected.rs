@@ -31,11 +31,11 @@ async fn test_db_elected_two_nodes_leader_and_replica() {
     let key_and_address = read_private_key::<S>("tx_signer_private_key.json");
 
     let node_1 = setup
-        .start_node("replica_then_leader", ConfiguredNodeRole::DbElected)
+        .start_node("node_1", ConfiguredNodeRole::DbElected)
         .await;
 
     let node_2 = setup
-        .start_node("replica", ConfiguredNodeRole::DbElected)
+        .start_node("node_2", ConfiguredNodeRole::DbElected)
         .await;
 
     node_1.wait_for_sequencer_ready().await.unwrap();
@@ -80,11 +80,11 @@ async fn test_db_elected_leader_failover() {
     };
 
     let node_1 = setup
-        .start_node("replica_then_leader", ConfiguredNodeRole::DbElected)
+        .start_node("node_1", ConfiguredNodeRole::DbElected)
         .await;
 
     let node_2 = setup
-        .start_node("replica", ConfiguredNodeRole::DbElected)
+        .start_node("node_2", ConfiguredNodeRole::DbElected)
         .await;
 
     node_1.wait_for_sequencer_ready().await.unwrap();
