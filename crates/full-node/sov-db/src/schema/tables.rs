@@ -33,7 +33,9 @@ use rockbound::schema::{ColumnFamilyName, KeyDecoder, KeyEncoder, ValueCodec};
 use rockbound::{CodecError, SchemaValue, SeekKeyEncoder};
 use sov_rollup_interface::common::SlotNumber;
 use sov_rollup_interface::stf::{EventKey, StoredEvent};
-use sov_rollup_interface::zk::aggregated_proof::SerializedAggregatedProof;
+use sov_rollup_interface::zk::aggregated_proof::{
+    SerializedAggregatedProof, SerializedPartialProofReceipt,
+};
 
 use super::types::{
     AccessoryKey, AccessoryStateValue, BatchNumber, DbHash, EventKeyNumber, EventNumber,
@@ -58,6 +60,8 @@ pub const LEDGER_TABLES: &[ColumnFamilyName] = &[
     EventByKey::table_name(),
     EventByNumber::table_name(),
     ProofByUniqueId::table_name(),
+    ProofReceiptByHash::table_name(),
+    ProofReceiptHashesBySlot::table_name(),
     FinalizedSlots::table_name(),
     StfInfoByNumber::table_name(),
     StfInfoMetadata::table_name(),
@@ -98,6 +102,11 @@ macro_rules! define_table_without_codec {
         $(#[$docs])*
         ///
         #[doc = concat!("Takes [`", stringify!($key), "`] as a key and returns [`", stringify!($value), "`]")]
+        #[cfg(feature = "migration-script")]
+        #[derive(Clone, Copy, Debug, Default)]
+        pub struct $table_name;
+
+        #[cfg(not(feature = "migration-script"))]
         #[derive(Clone, Copy, Debug, Default)]
         pub(crate) struct $table_name;
 
@@ -287,6 +296,16 @@ define_table_with_seek_key_codec!(
 define_table_with_seek_key_codec!(
     /// The primary source for proof data
     (ProofByUniqueId) ProofUniqueId => SerializedAggregatedProof
+);
+
+define_table_with_default_codec!(
+    /// Stored proof receipts by hash
+    (ProofReceiptByHash) DbHash => (SlotNumber, SerializedPartialProofReceipt)
+);
+
+define_table_with_default_codec!(
+    /// Secondary index for proof receipts by slot number. Used to support rollback for proof receipts.
+    (ProofReceiptHashesBySlot) SlotNumber => Vec<DbHash>
 );
 
 define_table_with_seek_key_codec!(

@@ -1,5 +1,5 @@
 use demo_stf::runtime::Runtime;
-use sov_address::MultiAddressEvm;
+use demo_stf::MultiAddressEvmSolana;
 use sov_mock_da::MockDaSpec;
 use sov_mock_zkvm::MockZkvm;
 use sov_modules_api::execution_mode::Native;
@@ -9,7 +9,7 @@ type S = sov_modules_api::configurable_spec::ConfigurableSpec<
     MockDaSpec,
     MockZkvm,
     MockZkvm,
-    MultiAddressEvm,
+    MultiAddressEvmSolana,
     Native,
 >;
 
@@ -19,7 +19,7 @@ fn main() {
 
     let spec = runtime.openapi_spec().unwrap();
     let serialized = serde_json::to_string_pretty(&spec).unwrap();
-    // crate: openapiv3"
+    // crate: openapiv3
     let spec = serde_json::from_str(&serialized).unwrap();
     let mut generator = progenitor::Generator::default();
 

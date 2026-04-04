@@ -16,6 +16,7 @@ use serde_with::base64::Base64;
 use serde_with::serde_as;
 use sov_metrics::{track_metrics, HttpMetrics};
 use sov_modules_api::capabilities::TransactionAuthenticator;
+use sov_modules_api::macros::config_value;
 use sov_modules_api::runtime::Runtime;
 use sov_modules_api::{FullyBakedTx, RawTx, RuntimeEventProcessor, RuntimeEventResponse};
 use sov_rest_utils::handle_bad_ws_request;
@@ -227,6 +228,13 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
     ) -> Result<impl IntoResponse, axum::response::Response> {
         let ip_addr = get_client_ip(headers, Some(&connect_info))
             .map_err(|e| IntoResponse::into_response(e.to_error_object()))?;
+
+        // Limit the incoming messsages directly on the web-socket
+        // layer.
+        //
+        // We choose 2x here for simplicity to cover the base64
+        // encoding overhead and the few bytes for the JSON around.
+        let ws = ws.max_message_size(config_value!("MAX_TX_SIZE") * 2);
 
         Ok(ws.on_upgrade(move |mut socket| async move {
             let mut shutdown_receiver = state.shutdown_receiver.clone();
@@ -469,9 +477,7 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
             tracing::warn!(?details, ?role, "Node is not ready");
             return Err(sov_rest_utils::ErrorObject {
                 status: axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                message: format!(
-                    "Node (role: {role:?}) is not ready: {details:?}"
-                ),
+                message: format!("Node (role: {role:?}) is not ready: {details:?}"),
                 details: Default::default(),
             }
             .into_response());
@@ -639,8 +645,8 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
     }
 
     #[cfg(feature = "test-utils")]
-    async fn axum_force_close_batch(state: State<Self>) -> ApiResult<()> {
-        state
+    async fn axum_force_close_batch(state: State<Self>) -> ApiResult<bool> {
+        let result = state
             .sequencer
             .force_close_current_batch()
             .await
@@ -649,8 +655,7 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
                 errors::internal_server_error_response_500("Unable to force close batch")
                     .into_response()
             })?;
-
-        Ok(().into())
+        Ok(result.into())
     }
 
     #[cfg(feature = "test-utils")]
@@ -721,9 +726,7 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
         };
         // Note: The previous version of this code returned one more than the requested number of events.
         // This is now fixed.
-        let end = start
-            .checked_add(pagination.size as u64)
-            .unwrap_or(u64::MAX);
+        let end = start.saturating_add(pagination.size as u64);
 
         let events =
             state.sequencer.list_events(start..end).await.map_err(|_| {
