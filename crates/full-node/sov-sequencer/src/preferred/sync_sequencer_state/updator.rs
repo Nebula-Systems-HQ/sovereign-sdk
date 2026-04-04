@@ -125,6 +125,24 @@ where
         self.recv(recv).await
     }
 
+    pub(crate) async fn check_promotion_readiness_msg(
+        &self,
+        max_concurrent_blobs: usize,
+        height_to_stop_at: Option<RollupHeight>,
+        reason: &'static str,
+    ) -> Result<Result<(), SequencerNotReadyDetails>, SequencerStateUpdatorError> {
+        let (resp, recv) = oneshot::channel();
+        self.send(Message::CheckPromotionReadiness {
+            resp,
+            max_concurrent_blobs,
+            height_to_stop_at,
+            reason,
+        })
+        .await?;
+
+        self.recv(recv).await
+    }
+
     pub(crate) async fn accept_tx_msg(
         &self,
         baked_tx: &FullyBakedTx,

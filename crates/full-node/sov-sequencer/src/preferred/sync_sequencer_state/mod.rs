@@ -68,6 +68,12 @@ pub(super) enum Message<S: Spec, Rt: Runtime<S>> {
         height_to_stop_at: Option<RollupHeight>,
         reason: &'static str,
     },
+    CheckPromotionReadiness {
+        resp: oneshot::Sender<Result<(), SequencerNotReadyDetails>>,
+        max_concurrent_blobs: usize,
+        height_to_stop_at: Option<RollupHeight>,
+        reason: &'static str,
+    },
 
     AcceptTx {
         resp: oneshot::Sender<AcceptTxRet<S, Rt>>,

@@ -440,6 +440,25 @@ where
         max_concurrent_blobs: usize,
         height_to_stop_at: Option<RollupHeight>,
     ) -> Result<(), SequencerNotReadyDetails> {
+        self.check_readiness_common(max_concurrent_blobs, height_to_stop_at, true)
+            .await
+    }
+
+    pub(crate) async fn check_promotion_readiness(
+        &self,
+        max_concurrent_blobs: usize,
+        height_to_stop_at: Option<RollupHeight>,
+    ) -> Result<(), SequencerNotReadyDetails> {
+        self.check_readiness_common(max_concurrent_blobs, height_to_stop_at, false)
+            .await
+    }
+
+    async fn check_readiness_common(
+        &self,
+        max_concurrent_blobs: usize,
+        height_to_stop_at: Option<RollupHeight>,
+        require_replica_first_batch: bool,
+    ) -> Result<(), SequencerNotReadyDetails> {
         // We cannot accept transactions until the latest finalized slot number
         // is AT LEAST 1. Meaning, as long as we're stuck at genesis, we can't
         // accept any transactions.
@@ -467,8 +486,10 @@ where
             }
         }
 
-        self.start_replica_task_notifier
-            .check_replica_status_or_ok_for_leader()?;
+        if require_replica_first_batch {
+            self.start_replica_task_notifier
+                .check_replica_status_or_ok_for_leader()?;
+        }
 
         self.is_ready.as_ref().map_err(|details| details.clone())?;
         Ok(())

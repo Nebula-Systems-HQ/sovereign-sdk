@@ -235,6 +235,23 @@ where
 
                 self.send_response(resp, ret, "check_readiness").await;
             }
+            Message::CheckPromotionReadiness {
+                resp,
+                max_concurrent_blobs,
+                height_to_stop_at,
+                reason,
+            } => {
+                let ret = self
+                    .process_check_promotion_readiness(
+                        max_concurrent_blobs,
+                        height_to_stop_at,
+                        reason,
+                    )
+                    .await;
+
+                self.send_response(resp, ret, "check_promotion_readiness")
+                    .await;
+            }
             Message::AcceptTx {
                 resp,
                 baked_tx,
@@ -619,6 +636,18 @@ where
         let inner = self.get_inner_with_timing(reason).await;
         inner
             .check_readiness(max_concurrent_blobs, height_to_stop_at)
+            .await
+    }
+
+    async fn process_check_promotion_readiness(
+        &mut self,
+        max_concurrent_blobs: usize,
+        height_to_stop_at: Option<RollupHeight>,
+        reason: &'static str,
+    ) -> Result<(), SequencerNotReadyDetails> {
+        let inner = self.get_inner_with_timing(reason).await;
+        inner
+            .check_promotion_readiness(max_concurrent_blobs, height_to_stop_at)
             .await
     }
 

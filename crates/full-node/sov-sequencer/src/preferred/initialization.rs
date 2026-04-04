@@ -1,9 +1,12 @@
 use super::*;
 use crate::preferred::db::heartbeat_task::HeartBeatTask;
+use crate::preferred::db::heartbeat_task::{PromotionEligibility, PromotionEligibilityChecker};
 use crate::preferred::db::SequencerRole;
 use anyhow::Context;
 use anyhow::Result;
+use async_trait::async_trait;
 use sov_db::ledger_db::LedgerDb;
+use sov_full_node_configs::sequencer::ConfiguredNodeRole;
 use sov_modules_api::capabilities::SequencerRemuneration;
 use sov_modules_api::rest::StateUpdateReceiver;
 use std::net::SocketAddr;
@@ -14,6 +17,40 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::debug;
+
+#[derive(Clone)]
+struct SequencerPromotionEligibilityChecker<S, Rt>
+where
+    S: Spec,
+    Rt: Runtime<S>,
+{
+    synchronized_state_updator: Arc<SequencerStateUpdator<S, Rt>>,
+    max_concurrent_blobs: usize,
+    stop_at_rollup_height: Option<RollupHeight>,
+}
+
+#[async_trait]
+impl<S, Rt> PromotionEligibilityChecker for SequencerPromotionEligibilityChecker<S, Rt>
+where
+    S: Spec,
+    Rt: Runtime<S>,
+{
+    async fn promotion_eligibility(&self) -> PromotionEligibility {
+        match self
+            .synchronized_state_updator
+            .check_promotion_readiness_msg(
+                self.max_concurrent_blobs,
+                self.stop_at_rollup_height.clone(),
+                "db_elected_promotion_readiness",
+            )
+            .await
+        {
+            Ok(Ok(())) => PromotionEligibility::Eligible,
+            Ok(Err(details)) => PromotionEligibility::NotReady(details),
+            Err(_) => PromotionEligibility::Unavailable("sequencer state updater unavailable"),
+        }
+    }
+}
 
 /// Builder for [`PreferredSequencer`] initialization.
 pub struct Builder<S, Rt, Da>
@@ -199,6 +236,7 @@ where
         handles.push(side_effects_task);
 
         let synchronized_state_updator = Arc::new(synchronized_state_updator);
+        let heartbeat_stop_at_rollup_height = stop_at_rollup_height.clone();
         let execution_backend = SequencerTxExecutionBackend {
             api_state: api_state.clone(),
             executor_queue_id: tx_queue_id.clone(),
@@ -238,7 +276,7 @@ where
         if let SequencerRole::PgSyncReplica = seq_role {
             if let Some(postgres_config) = &preferred_config.postgres_config {
                 let replica_task_handle = replica_task
-                    .start(synchronized_state_updator, postgres_config)
+                    .start(synchronized_state_updator.clone(), postgres_config)
                     .await;
                 handles.push(replica_task_handle.data_fetcher_handle);
                 handles.push(replica_task_handle.sync_task_handle);
@@ -247,11 +285,23 @@ where
 
         // Launch heartbeat tasks for leadership election and node registration
         if let Some(postgres_config) = &preferred_config.postgres_config {
+            let promotion_eligibility_checker = if seq_role == SequencerRole::PgSyncReplica
+                && postgres_config.node_role == ConfiguredNodeRole::DbElected
+            {
+                Some(Arc::new(SequencerPromotionEligibilityChecker {
+                    synchronized_state_updator: synchronized_state_updator.clone(),
+                    max_concurrent_blobs: config.max_concurrent_blobs,
+                    stop_at_rollup_height: heartbeat_stop_at_rollup_height,
+                }) as Arc<dyn PromotionEligibilityChecker>)
+            } else {
+                None
+            };
             let heartbeat_task = HeartBeatTask::new(
                 postgres_config.clone(),
                 shutdown_sender.clone(),
                 bind_addr,
                 postgres_config.leader_election.heartbeat_interval(),
+                promotion_eligibility_checker,
             )
             .await?;
             let heartbeat_handle = heartbeat_task.spawn(seq_role).await;
