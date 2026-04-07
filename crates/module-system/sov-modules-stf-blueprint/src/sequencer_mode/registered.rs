@@ -262,6 +262,21 @@ where
     metrics.timings.mark_tx_attempted_timer.end();
     metrics.timings.mark_tx_attempted_access_metrics = pre_exec_working_set.metrics().take();
 
+    metrics.timings.pre_reserve_gas_timer.start();
+    if let Err(err) = runtime.pre_reserve_gas(&message, &mut ctx, &mut pre_exec_working_set) {
+        let (scratchpad, pre_exec_gas_meter) = pre_exec_working_set.revert();
+        return (
+            Err((
+                TxProcessingError::PreReserveGasFailed(err.to_string()),
+                raw_tx,
+            )),
+            scratchpad,
+            pre_exec_gas_meter,
+        );
+    }
+    metrics.timings.pre_reserve_gas_timer.end();
+    metrics.timings.pre_reserve_gas_access_metrics = pre_exec_working_set.metrics().take();
+
     metrics.timings.reserve_gas_timer.start();
     let gas_price = pre_exec_working_set.gas_price();
     if let Err(err) =
@@ -340,7 +355,6 @@ where
     // Uses the Bank module via the runtime to emit a proper TokenTransferred event.
     #[cfg(feature = "native")]
     {
-        use sov_state::EventContainer;
         let gas_payer = ctx.gas_refund_recipient();
         let priority_fee = transaction_consumption.priority_fee();
         let gas_amount = Amount::new(base_fee_val.0 .0 + priority_fee.0 .0);

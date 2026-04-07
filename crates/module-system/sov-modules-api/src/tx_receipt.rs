@@ -87,6 +87,9 @@ pub enum TxProcessingError {
     /// Impossible to reserve gas for the transaction to be executed.
     #[error("Impossible to reserve gas for the transaction to be executed, reason: {0}.")]
     CannotReserveGas(String),
+    /// The pre-reserve gas hook failed before gas reservation.
+    #[error("Pre-reserve gas hook failed, reason: {0}.")]
+    PreReserveGasFailed(String),
     /// Impossible to resolve the context of the transaction.
     #[error("Impossible to resolve the context of the transaction, reason: {0}.")]
     CannotResolveContext(String),

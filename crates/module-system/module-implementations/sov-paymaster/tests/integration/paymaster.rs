@@ -1,16 +1,29 @@
+use std::collections::HashMap;
 use std::num::NonZeroU64;
 
+use sov_metrics::{AuthAndProcessMetrics, AuthAndProcessTimings};
+use sov_modules_api::capabilities::{
+    GasEnforcer, HasCapabilities, HasKernel, TransactionAuthenticator,
+};
+use sov_modules_api::hooks::{BlockHooks, FinalizeHook, TxHooks};
 use sov_modules_api::macros::config_value;
-use sov_modules_api::transaction::TxDetails;
-use sov_modules_api::{Amount, TxEffect};
+use sov_modules_api::transaction::{AuthenticatedTransactionData, Credentials, TxDetails};
+use sov_modules_api::{
+    Amount, BasicGasMeter, Context, DispatchCall, ExecutionContext, FullyBakedTx, Gas, GasMeter,
+    GasSpec, Genesis, ModuleInfo, NestedEnumUtils, NoOpControlFlow, OperatingMode, Runtime,
+    RuntimeEventProcessor, SequencerType, Spec, StateCheckpoint, StateProvider, StateReader,
+    TxEffect, TxProcessingError, TxState, WorkingSet,
+};
+use sov_modules_stf_blueprint::process_tx_and_reward_prover;
 use sov_paymaster::{
     AllowedSequencerUpdate, CallMessage as PaymasterCallMessage, Event as PaymasterEvent,
     PayeePolicy, Paymaster, PaymasterPolicyInitializer, PolicyUpdate, SafeVec,
 };
 use sov_test_utils::runtime::{TestRunner, TokenId, ValueSetter, ValueSetterCallMessage};
+use sov_test_utils::storage::ForklessStorageManager;
 use sov_test_utils::{
-    AsUser, EncodeCall, TransactionTestCase, TransactionType, TEST_DEFAULT_MAX_FEE,
-    TEST_DEFAULT_MAX_PRIORITY_FEE, TEST_DEFAULT_USER_BALANCE,
+    default_test_tx_details, AsUser, EncodeCall, TransactionTestCase, TransactionType,
+    TEST_DEFAULT_MAX_FEE, TEST_DEFAULT_MAX_PRIORITY_FEE, TEST_DEFAULT_USER_BALANCE,
 };
 
 use crate::runtime::{PaymasterRuntime, PaymasterRuntimeEvent};
@@ -37,6 +50,245 @@ use crate::utils::{setup, DoValueSetterTx, TxOutcome, RT, S};
 //   -[x] Max fee too high
 //   -[x] Denied
 // -[x] Test unhappy path - user pays when paymaster does not. In this case, paymaster balance must be unchanged
+
+#[derive(Clone, Default)]
+struct FailingPreReserveRuntime<S: Spec> {
+    inner: PaymasterRuntime<S>,
+}
+
+impl<S: Spec> DispatchCall for FailingPreReserveRuntime<S> {
+    type Spec = S;
+    type Decodable = <PaymasterRuntime<S> as DispatchCall>::Decodable;
+
+    fn encode(decodable: &Self::Decodable) -> Vec<u8> {
+        <PaymasterRuntime<S> as DispatchCall>::encode(decodable)
+    }
+
+    fn dispatch_call<I: StateProvider<Self::Spec>>(
+        &mut self,
+        message: Self::Decodable,
+        state: &mut WorkingSet<Self::Spec, I>,
+        context: &Context<Self::Spec>,
+    ) -> Result<(), sov_modules_api::Error> {
+        self.inner.dispatch_call(message, state, context)
+    }
+
+    fn module_id(&self, message: &Self::Decodable) -> &sov_modules_api::ModuleId {
+        self.inner.module_id(message)
+    }
+
+    fn module_info(
+        &self,
+        discriminant: <Self::Decodable as NestedEnumUtils>::Discriminants,
+    ) -> &dyn ModuleInfo<Spec = Self::Spec> {
+        self.inner.module_info(discriminant)
+    }
+}
+
+impl<S: Spec> RuntimeEventProcessor for FailingPreReserveRuntime<S> {
+    type RuntimeEvent = <PaymasterRuntime<S> as RuntimeEventProcessor>::RuntimeEvent;
+
+    fn convert_to_runtime_event(
+        event: sov_modules_api::TypeErasedEvent,
+    ) -> Option<Self::RuntimeEvent> {
+        <PaymasterRuntime<S> as RuntimeEventProcessor>::convert_to_runtime_event(event)
+    }
+}
+
+impl<S: Spec> HasCapabilities<S> for FailingPreReserveRuntime<S> {
+    type Capabilities<'a>
+        = <PaymasterRuntime<S> as HasCapabilities<S>>::Capabilities<'a>
+    where
+        Self: 'a;
+
+    fn capabilities(&mut self) -> sov_modules_api::capabilities::Guard<Self::Capabilities<'_>> {
+        self.inner.capabilities()
+    }
+}
+
+impl<S: Spec> HasKernel<S> for FailingPreReserveRuntime<S> {
+    type Kernel<'a>
+        = <PaymasterRuntime<S> as HasKernel<S>>::Kernel<'a>
+    where
+        Self: 'a;
+
+    fn inner(&mut self) -> sov_modules_api::capabilities::Guard<Self::Kernel<'_>> {
+        <PaymasterRuntime<S> as HasKernel<S>>::inner(&mut self.inner)
+    }
+
+    fn kernel_with_slot_mapping(
+        &self,
+    ) -> std::sync::Arc<dyn sov_modules_api::capabilities::KernelWithSlotMapping<S>> {
+        self.inner.kernel_with_slot_mapping()
+    }
+}
+
+impl<S: Spec> Genesis for FailingPreReserveRuntime<S> {
+    type Spec = S;
+    type Config = <PaymasterRuntime<S> as Genesis>::Config;
+
+    fn genesis(
+        &mut self,
+        genesis_rollup_header: &<<Self::Spec as Spec>::Da as sov_modules_api::DaSpec>::BlockHeader,
+        config: &Self::Config,
+        state: &mut impl sov_modules_api::GenesisState<Self::Spec>,
+    ) -> Result<(), sov_modules_api::Error> {
+        self.inner.genesis(genesis_rollup_header, config, state)
+    }
+}
+
+impl<S: Spec> TxHooks for FailingPreReserveRuntime<S> {
+    type Spec = S;
+
+    fn pre_dispatch_tx_hook<T: TxState<Self::Spec>>(
+        &mut self,
+        tx: &AuthenticatedTransactionData<Self::Spec>,
+        state: &mut T,
+    ) -> anyhow::Result<()> {
+        <PaymasterRuntime<S> as TxHooks>::pre_dispatch_tx_hook(&mut self.inner, tx, state)
+    }
+
+    fn post_dispatch_tx_hook<T: TxState<Self::Spec>>(
+        &mut self,
+        tx: &AuthenticatedTransactionData<Self::Spec>,
+        ctx: &Context<Self::Spec>,
+        state: &mut T,
+    ) -> anyhow::Result<()> {
+        <PaymasterRuntime<S> as TxHooks>::post_dispatch_tx_hook(&mut self.inner, tx, ctx, state)
+    }
+}
+
+impl<S: Spec> BlockHooks for FailingPreReserveRuntime<S> {
+    type Spec = S;
+
+    fn begin_rollup_block_hook(
+        &mut self,
+        visible_hash: &<<Self::Spec as Spec>::Storage as sov_modules_api::Storage>::Root,
+        state: &mut StateCheckpoint<Self::Spec>,
+    ) {
+        <PaymasterRuntime<S> as BlockHooks>::begin_rollup_block_hook(
+            &mut self.inner,
+            visible_hash,
+            state,
+        );
+    }
+
+    fn end_rollup_block_hook(&mut self, state: &mut StateCheckpoint<Self::Spec>) {
+        <PaymasterRuntime<S> as BlockHooks>::end_rollup_block_hook(&mut self.inner, state);
+    }
+}
+
+impl<S: Spec> FinalizeHook for FailingPreReserveRuntime<S> {
+    type Spec = S;
+
+    fn finalize_hook(
+        &mut self,
+        root_hash: &<<Self::Spec as Spec>::Storage as sov_modules_api::Storage>::Root,
+        state: &mut impl sov_modules_api::AccessoryStateReaderAndWriter,
+    ) {
+        <PaymasterRuntime<S> as FinalizeHook>::finalize_hook(&mut self.inner, root_hash, state);
+    }
+}
+
+impl<S> Runtime<S> for FailingPreReserveRuntime<S>
+where
+    S: Spec,
+    sov_modules_api::transaction::Transaction<Self, S>:
+        sov_modules_api::sov_universal_wallet::schema::UniversalWallet,
+    <Self as DispatchCall>::Decodable:
+        sov_modules_api::sov_universal_wallet::schema::UniversalWallet,
+{
+    const CHAIN_HASH: [u8; 32] = <PaymasterRuntime<S> as Runtime<S>>::CHAIN_HASH;
+
+    type GenesisConfig = <PaymasterRuntime<S> as Runtime<S>>::GenesisConfig;
+    type GenesisInput = <PaymasterRuntime<S> as Runtime<S>>::GenesisInput;
+    type ModuleExecutionConfig = <PaymasterRuntime<S> as Runtime<S>>::ModuleExecutionConfig;
+    type Auth = <PaymasterRuntime<S> as Runtime<S>>::Auth;
+
+    fn endpoints(api_state: sov_modules_api::rest::ApiState<S>) -> sov_modules_api::NodeEndpoints {
+        <PaymasterRuntime<S> as Runtime<S>>::endpoints(api_state)
+    }
+
+    fn genesis_config(input: &Self::GenesisInput) -> anyhow::Result<Self::GenesisConfig> {
+        <PaymasterRuntime<S> as Runtime<S>>::genesis_config(input)
+    }
+
+    fn operating_mode(genesis: &Self::GenesisConfig) -> OperatingMode {
+        <PaymasterRuntime<S> as Runtime<S>>::operating_mode(genesis)
+    }
+
+    fn wrap_call(
+        auth_data: <Self::Auth as TransactionAuthenticator<S>>::Decodable,
+    ) -> Self::Decodable {
+        <PaymasterRuntime<S> as Runtime<S>>::wrap_call(auth_data)
+    }
+
+    fn get_transaction_delay_ms(&self, call: &Self::Decodable) -> u64 {
+        <PaymasterRuntime<S> as Runtime<S>>::get_transaction_delay_ms(&self.inner, call)
+    }
+
+    fn get_transaction_priority(&self, call: &FullyBakedTx) -> u32 {
+        <PaymasterRuntime<S> as Runtime<S>>::get_transaction_priority(&self.inner, call)
+    }
+
+    fn pre_reserve_gas(
+        &mut self,
+        _call: &Self::Decodable,
+        _context: &mut Context<S>,
+        state: &mut impl TxState<S>,
+    ) -> anyhow::Result<()> {
+        self.inner.value_setter.value.set(&777, state)?;
+        Err(anyhow::anyhow!("delegated billing denied"))
+    }
+
+    fn is_unauthorized_system_tx(
+        &self,
+        call: &Self::Decodable,
+        context: &Context<S>,
+        state: &mut impl TxState<S>,
+    ) -> bool {
+        <PaymasterRuntime<S> as Runtime<S>>::is_unauthorized_system_tx(
+            &self.inner,
+            call,
+            context,
+            state,
+        )
+    }
+
+    fn populate_pinned_cache(storage: &S::Storage) -> Option<sov_state::pinned_cache::PinnedCache> {
+        <PaymasterRuntime<S> as Runtime<S>>::populate_pinned_cache(storage)
+    }
+
+    fn resolve_address<ST: StateReader<sov_modules_api::User>>(
+        &self,
+        default_address: &S::Address,
+        credential_id: &sov_modules_api::CredentialId,
+        state: &mut ST,
+    ) -> Result<S::Address, ST::Error> {
+        <PaymasterRuntime<S> as Runtime<S>>::resolve_address(
+            &self.inner,
+            default_address,
+            credential_id,
+            state,
+        )
+    }
+
+    fn on_gas_charged(
+        &self,
+        state: &mut impl sov_state::EventContainer,
+        gas_payer: &S::Address,
+        sequencer: &S::Address,
+        amount: Amount,
+    ) {
+        <PaymasterRuntime<S> as Runtime<S>>::on_gas_charged(
+            &self.inner,
+            state,
+            gas_payer,
+            sequencer,
+            amount,
+        );
+    }
+}
 
 // Test that a transaction for a user succeeds even when the user has no balance to pay for gas
 // if the paymaster is willing to cover that user.
@@ -917,4 +1169,150 @@ fn test_can_remove_own_sequencer() {
             assert_eq!(payer_for_sequencer, None);
         }),
     });
+}
+
+#[test]
+fn test_gas_payer_override_bypasses_paymaster() {
+    let mut setup = setup(Amount::ZERO);
+    setup.payer_setup().policy.default_payee_policy = PayeePolicy::Allow {
+        max_fee: None,
+        gas_limit: None,
+        max_gas_price: None,
+        transaction_limit: Some(NonZeroU64::new(1).unwrap()),
+    };
+
+    let runner: TestRunner<RT, S> = TestRunner::new_with_genesis(
+        setup.genesis_config.into_genesis_params(),
+        PaymasterRuntime::default(),
+    );
+
+    let mut runtime = PaymasterRuntime::<S>::default();
+    let storage = runner.storage_manager().create_prover_storage();
+    let mut checkpoint = StateCheckpoint::<S>::new(storage, &runtime.kernel(), None);
+
+    let sender = setup.user.address();
+    let payer = setup.payer.address();
+    let tx = AuthenticatedTransactionData(default_test_tx_details::<S>());
+    let mut context = Context::<S>::with_payer(
+        sender,
+        Credentials::default(),
+        setup.sequencer.as_user().address(),
+        setup.sequencer.da_address,
+        payer,
+        None,
+        ExecutionContext::Node,
+        SequencerType::NonPreferred,
+    );
+
+    let sender_balance_before = TestRunner::<RT, S>::bank_gas_balance(&sender, &mut checkpoint)
+        .expect("sender should have a gas account");
+    let payer_balance_before = TestRunner::<RT, S>::bank_gas_balance(&payer, &mut checkpoint)
+        .expect("payer should have a gas account");
+
+    runtime
+        .gas_enforcer()
+        .try_reserve_gas(
+            &tx,
+            <S as GasSpec>::initial_base_fee_per_gas(),
+            &mut context,
+            &mut checkpoint,
+        )
+        .expect("gas reservation should succeed via the override branch");
+
+    let sender_balance_after = TestRunner::<RT, S>::bank_gas_balance(&sender, &mut checkpoint)
+        .expect("sender should still have a gas account");
+    let payer_balance_after = TestRunner::<RT, S>::bank_gas_balance(&payer, &mut checkpoint)
+        .expect("payer should still have a gas account");
+
+    assert_eq!(sender_balance_after, sender_balance_before);
+    assert_eq!(
+        payer_balance_after,
+        payer_balance_before
+            .checked_sub(tx.0.max_fee)
+            .expect("reservation should deduct max_fee from the override payer"),
+    );
+    assert_eq!(context.gas_refund_recipient(), &payer);
+
+    // If the paymaster path had been consulted, the one-shot allowance would have been
+    // decremented and persisted as a deny policy for this sender.
+    let policy_key: sov_paymaster::PolicyKey<_> =
+        format!("payers/{payer}/policy/{sender}").parse().unwrap();
+    let mutated_policy = runtime
+        .paymaster
+        .policies
+        .get(&policy_key, &mut checkpoint)
+        .unwrap();
+    assert_eq!(mutated_policy, None);
+}
+
+#[test]
+fn test_pre_reserve_gas_failure_returns_pre_reserve_gas_failed() {
+    let setup = setup(TEST_DEFAULT_USER_BALANCE);
+    let runner: TestRunner<RT, S> = TestRunner::new_with_genesis(
+        setup.genesis_config.into_genesis_params(),
+        PaymasterRuntime::default(),
+    );
+
+    let mut runtime = FailingPreReserveRuntime::<S>::default();
+    let storage = runner.storage_manager().create_prover_storage();
+    let checkpoint = StateCheckpoint::<S>::new(storage, &runtime.kernel(), None);
+    let scratchpad = checkpoint.to_tx_scratchpad();
+
+    let raw_tx = setup
+        .user
+        .create_plain_message::<RT, ValueSetter<S>>(ValueSetterCallMessage::SetValue {
+            value: 99,
+            gas: None,
+        })
+        .to_serialized_authenticated_tx(&mut HashMap::new());
+
+    let gas_price = <S as GasSpec>::initial_base_fee_per_gas();
+    let pre_exec_gas_meter =
+        BasicGasMeter::new_with_gas(<S as GasSpec>::max_tx_check_costs(), gas_price);
+    let mut pre_exec_working_set = scratchpad.to_pre_exec_working_set(pre_exec_gas_meter);
+    pre_exec_working_set
+        .charge_gas(<S as GasSpec>::process_tx_pre_exec_checks_gas())
+        .expect("the pre-exec meter should cover authentication costs in this test");
+
+    let validated_output = <FailingPreReserveRuntime<S> as Runtime<S>>::Auth::authenticate(
+        &raw_tx,
+        &mut pre_exec_working_set,
+    )
+    .expect("transaction authentication should succeed before the hook failure is exercised");
+
+    let metrics = AuthAndProcessMetrics::new(
+        validated_output.0.raw_tx_hash.into(),
+        AuthAndProcessTimings::new_with_defaults(ExecutionContext::Node.str()),
+    );
+
+    let (result, mut scratchpad, _pre_exec_gas_meter) = process_tx_and_reward_prover(
+        &mut runtime,
+        pre_exec_working_set,
+        <S as Spec>::Gas::max(),
+        validated_output,
+        raw_tx,
+        &setup.sequencer.da_address,
+        setup.sequencer.as_user().address(),
+        ExecutionContext::Node,
+        &NoOpControlFlow,
+        OperatingMode::Optimistic,
+        metrics,
+        SequencerType::NonPreferred,
+    );
+
+    let (error, _raw_tx) = result.expect_err("the failing hook should skip the transaction");
+    assert_eq!(
+        error,
+        TxProcessingError::PreReserveGasFailed("delegated billing denied".to_string()),
+    );
+    assert_eq!(
+        runtime
+            .inner
+            .value_setter
+            .value
+            .get(&mut scratchpad)
+            .unwrap(),
+        None,
+        "pre_reserve_gas writes should be reverted on hook failure",
+    );
 }

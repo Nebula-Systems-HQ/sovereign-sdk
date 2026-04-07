@@ -1,15 +1,26 @@
 //! Pre-execution working set implementation.
 
 use sov_metrics::{StateAccessMetric, StateMetrics};
-use sov_state::{Namespace, SlotKey, SlotValue};
+use sov_state::pinned_cache::PinnedCache;
+use sov_state::{EventContainer, Namespace, SlotKey, SlotValue, TypeErasedEvent};
 
 use super::super::{StateMetricsProvider, StateProvider, UniversalStateAccessor};
 use super::TxScratchpad;
 use crate::module::Spec;
-use crate::state::traits::delegate_version_reader;
+use crate::state::traits::{delegate_version_reader, PerBlockCache, PinnedCacheAccessor};
 use crate::{BasicGasMeter, Gas, GasMeter, GasMeteringError, GetGasPrice};
 
-/// A working set that can be used to charge gas for pre transaction execution checks.
+/// Pre-execution working set used for transaction processing steps that run before gas
+/// reservation: context resolution, uniqueness checks, marking attempts, and the
+/// `pre_reserve_gas` hook.
+///
+/// This type has broader state access than strictly necessary for pre-execution
+/// (including `ProvableStateWriter<Kernel>` and `AccessoryStateWriter`) because the
+/// `pre_reserve_gas` hook may need to read or write gas delegation configuration in
+/// privileged state. Pre-exec changes carried forward into the [`TxScratchpad`] via
+/// [`PreExecWorkingSet::to_scratchpad_and_gas_meter`] survive later transaction
+/// execution reverts; changes made after [`PreExecWorkingSet::commit`] are discarded
+/// by [`PreExecWorkingSet::revert`].
 pub struct PreExecWorkingSet<S: Spec, I: StateProvider<S>> {
     pub(super) inner: TxScratchpad<S, I>,
     pub(super) gas_meter: BasicGasMeter<S>,
@@ -74,6 +85,16 @@ impl<S: Spec, I: StateProvider<S>> GetGasPrice for PreExecWorkingSet<S, I> {
     }
 }
 
+impl<S: Spec, I: StateProvider<S>> EventContainer for PreExecWorkingSet<S, I> {
+    fn add_event<E: 'static + Send + Sync>(&mut self, event_key: &str, event: E) {
+        self.inner.add_event(event_key, event);
+    }
+
+    fn add_type_erased_event(&mut self, event: TypeErasedEvent) {
+        self.inner.add_type_erased_event(event);
+    }
+}
+
 impl<S: Spec, I: StateProvider<S>> UniversalStateAccessor for PreExecWorkingSet<S, I> {
     fn get_size(
         &mut self,
@@ -122,6 +143,38 @@ impl<S: Spec, I: StateProvider<S>> UniversalStateAccessor for PreExecWorkingSet<
 }
 
 delegate_version_reader!(PreExecWorkingSet<S, I> where [S: Spec, I: StateProvider<S>] => inner);
+
+impl<S: Spec, I: StateProvider<S>> PerBlockCache for PreExecWorkingSet<S, I> {
+    fn get_cached<T: 'static + Send + Sync>(&self, slot_key: Option<SlotKey>) -> Option<&T> {
+        self.inner.get_cached::<T>(slot_key)
+    }
+
+    fn put_cached<T: 'static + Send + Sync + super::super::BorshSerializedSize>(
+        &mut self,
+        slot_key: Option<SlotKey>,
+        value: T,
+    ) {
+        self.inner.put_cached(slot_key, value);
+    }
+
+    fn delete_cached<T: 'static + Send + Sync>(&mut self, slot_key: Option<SlotKey>) {
+        self.inner.delete_cached::<T>(slot_key);
+    }
+
+    fn update_cache_with(&mut self, other: super::super::temp_cache::TempCache) {
+        self.inner.update_cache_with(other);
+    }
+}
+
+impl<S: Spec, I: StateProvider<S>> PinnedCacheAccessor<S> for PreExecWorkingSet<S, I> {
+    fn pinned_cache_mut(&mut self) -> Option<&mut PinnedCache> {
+        self.inner.pinned_cache_mut()
+    }
+
+    fn storage(&self) -> &S::Storage {
+        self.inner.storage()
+    }
+}
 
 #[cfg(test)]
 mod tests {
