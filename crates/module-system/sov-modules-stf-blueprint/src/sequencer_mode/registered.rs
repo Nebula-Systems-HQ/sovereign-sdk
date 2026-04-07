@@ -343,7 +343,7 @@ where
         use sov_state::EventContainer;
         let gas_payer = ctx.gas_refund_recipient();
         let priority_fee = transaction_consumption.priority_fee();
-        let gas_amount = Amount::new(base_fee_val.0.0 + priority_fee.0.0);
+        let gas_amount = Amount::new(base_fee_val.0 .0 + priority_fee.0 .0);
         if gas_amount > Amount::ZERO {
             runtime.on_gas_charged(
                 &mut scratchpad,
@@ -356,8 +356,10 @@ where
         let gas_events = scratchpad.take_events();
         if !gas_events.is_empty() {
             let mut apply_tx = apply_tx;
-            let gas_stored_events =
-                crate::stf_blueprint::convert_to_runtime_events::<S, R>(gas_events, raw_tx_hash.into());
+            let gas_stored_events = crate::stf_blueprint::convert_to_runtime_events::<S, R>(
+                gas_events,
+                raw_tx_hash.into(),
+            );
             apply_tx.receipt.events.splice(0..0, gas_stored_events);
             return (Ok(apply_tx), scratchpad, pre_exec_gas_meter);
         }

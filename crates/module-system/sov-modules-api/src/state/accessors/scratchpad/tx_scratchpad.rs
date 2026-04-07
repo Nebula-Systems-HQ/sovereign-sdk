@@ -5,7 +5,9 @@ use std::marker::PhantomData;
 use sov_metrics::{StateAccessMetric, StateMetrics};
 use sov_rollup_interface::stf::ExecutionContext;
 use sov_state::pinned_cache::PinnedCache;
-use sov_state::{EventContainer, Namespace, NodeLeafAndMaybeValue, SlotKey, SlotValue, TypeErasedEvent};
+use sov_state::{
+    EventContainer, Namespace, NodeLeafAndMaybeValue, SlotKey, SlotValue, TypeErasedEvent,
+};
 
 use super::super::checkpoints::StateCheckpoint;
 use super::super::internals::{FirstTimeReads, RevertableWriter};
