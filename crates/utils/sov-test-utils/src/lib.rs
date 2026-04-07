@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 pub use generators::MessageGenerator;
 pub use interface::*;
-pub use rt_agnostic_blueprint::RtAgnosticBlueprint;
+pub use rt_agnostic_blueprint::{ParallelProverFactory, ProverFactory, RtAgnosticBlueprint};
 use serde::{Deserialize, Serialize};
 pub use sov_db::schema::SchemaBatch;
 pub use sov_mock_da::verifier::MockDaSpec;
@@ -66,6 +66,8 @@ pub mod storage;
 pub mod docker;
 /// Utilities that specify an interface for testing.
 pub mod interface;
+/// Utilities for running and controlling toxiproxy containers in tests.
+pub mod sov_toxi_proxi_image;
 
 /// The default test crypto spec type.
 pub type TestCryptoSpec = MockZkvmCryptoSpec;

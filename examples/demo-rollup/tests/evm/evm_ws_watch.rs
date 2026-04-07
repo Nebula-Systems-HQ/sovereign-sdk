@@ -7,13 +7,13 @@ use std::time::Duration;
 use tokio::time::timeout;
 
 use crate::evm::evm_test_helper::alloy_ws_client;
-use crate::evm::evm_test_helper::setup_test_rollup;
 use crate::evm::evm_test_helper::EVM_EXTENSION;
+use crate::evm::evm_test_helper::{setup_test_rollup, setup_test_rollup_with_ideal_lag};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ws_watch_returns_receipt() -> anyhow::Result<()> {
     let rollup = setup_test_rollup(0, EVM_EXTENSION).await;
-    rollup.wait_for_next_blocks(1).await;
+    rollup.wait_for_rollup_height_advance_by(1).await;
     let client = alloy_ws_client(rollup.http_addr).await;
 
     let tx = TransactionRequest::default().with_to(Address::ZERO);
@@ -31,7 +31,7 @@ async fn ws_watch_returns_receipt() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn ws_get_receipt() -> anyhow::Result<()> {
     let rollup = setup_test_rollup(0, EVM_EXTENSION).await;
-    rollup.wait_for_next_blocks(1).await;
+    rollup.wait_for_rollup_height_advance_by(1).await;
     let client = alloy_ws_client(rollup.http_addr).await;
 
     let tx = TransactionRequest::default().with_to(Address::ZERO);
@@ -50,7 +50,7 @@ async fn ws_subscribe_new_heads() -> anyhow::Result<()> {
     let rollup = setup_test_rollup(0, EVM_EXTENSION).await;
     let client = alloy_ws_client(rollup.http_addr).await;
     let subscription = client.subscribe_blocks().await?;
-    rollup.wait_for_next_blocks(3).await;
+    rollup.wait_for_rollup_height_advance_by(3).await;
 
     let headers: Vec<_> = subscription.into_stream().take(3).collect().await;
 
@@ -63,15 +63,15 @@ async fn ws_subscribe_new_heads() -> anyhow::Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ws_subscribe_new_heads_sizes() -> anyhow::Result<()> {
-    let rollup = setup_test_rollup(0, EVM_EXTENSION).await;
+    let rollup = setup_test_rollup_with_ideal_lag(0, EVM_EXTENSION, 0).await;
     let client = alloy_ws_client(rollup.http_addr).await;
     let mut subscription = client.subscribe_blocks().await?;
-    rollup.wait_for_next_blocks(1).await;
+    rollup.wait_for_rollup_height_advance_by(1).await;
 
     let header = subscription.recv().await?;
     assert_eq!(header.number, 2);
-    // Block size is 512 bytes with gas_limit = 100_000_000_000 (5-byte RLP encoding)
-    // Previously was 511 bytes with gas_limit = 1_000_000_000 (4-byte RLP encoding)
+    // Block size is 512 bytes with gas_limit = 100_000_000_000 (5-byte RLP encoding).
+    // The cached body RLP omits withdrawals while withdrawals are unavailable.
     assert_eq!(header.size.unwrap().to::<u64>(), 512);
 
     Ok(())

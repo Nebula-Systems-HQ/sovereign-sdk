@@ -1,6 +1,6 @@
 use super::*;
 use sov_modules_api::VisibleSlotNumber;
-use std::num::NonZero;
+use std::{num::NonZero, sync::Arc};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_db_operations_leader() {
@@ -44,7 +44,22 @@ async fn test_db_operations_leader() {
         .unwrap();
 
     db.as_mut()
-        .add_proof_blob(sequence_number, 3, Arc::new([1, 2, 3]))
+        .add_proof_blob(
+            sequence_number + 1,
+            3,
+            PreferredProofDataBytes(Arc::new(*b"proof_data")),
+        )
+        .await
+        .unwrap();
+
+    // Add more txs to the batch after the proof blob. They should come back when we read from the DB.
+    db.as_mut()
+        .add_tx(
+            sequence_number,
+            3,
+            FullyBakedTx::new(vec![7, 8, 9]),
+            TxHash::new([3; 32]),
+        )
         .await
         .unwrap();
 
@@ -56,7 +71,39 @@ async fn test_db_operations_leader() {
         "Data should exist after adding transactions"
     );
 
-    db.as_mut().prune(2).await.unwrap();
+    let data = db.as_mut().current_data().await.unwrap();
+    assert!(
+        data.completed_blobs.len() == 2,
+        "Should have 2 completed blobs but found {}",
+        data.completed_blobs.len()
+    );
+
+    let ReadBlob::Batch(batch) = &data.completed_blobs[0] else {
+        panic!("Completed blob must be a batch");
+    };
+    assert_eq!(batch.sequence_number, sequence_number);
+    assert_eq!(batch.txs.len(), 3);
+
+    let ReadBlob::Proof {
+        sequence_number: proof_sequence_number,
+        data: proof_data,
+        ..
+    } = &data.completed_blobs[1]
+    else {
+        panic!("Completed blob must be a proof");
+    };
+    assert!(
+        *proof_sequence_number == (sequence_number + 1),
+        "Should have a completed proof blob with sequence number {}",
+        sequence_number + 1
+    );
+    assert_eq!(
+        &*proof_data.0,
+        b"proof_data".as_slice(),
+        "Proof data should be correct"
+    );
+
+    db.as_mut().prune(3).await.unwrap();
     let data = db.as_mut().current_data().await.unwrap();
     assert!(data.is_empty(), "Data should be empty after prune");
 }
@@ -119,7 +166,11 @@ async fn test_db_operations_replica() {
 
     let err = db_replica
         .as_mut()
-        .add_proof_blob(sequence_number, 3, Arc::new([1, 2, 3]))
+        .add_proof_blob(
+            sequence_number,
+            3,
+            PreferredProofDataBytes(Arc::new([1, 2, 3])),
+        )
         .await
         .unwrap_err();
 
