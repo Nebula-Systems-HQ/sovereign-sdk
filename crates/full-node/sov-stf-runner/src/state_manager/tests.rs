@@ -14,7 +14,6 @@ use sov_mock_da::{
     BlockProducingConfig, MockAddress, MockBlock, MockBlockHeader, MockDaConfig, MockDaService,
     MockDaSpec, MockHash, PlannedFork, RandomizationBehaviour, RandomizationConfig,
 };
-use sov_mock_zkvm::MockZkvm;
 use sov_modules_api::provable_height_tracker::InfiniteHeight;
 use sov_rollup_interface::common::{HexHash, RollupHeight, SlotNumber};
 use sov_rollup_interface::da::{DaSpec, RelevantBlobIters};
@@ -24,12 +23,14 @@ use sov_rollup_interface::stf::GenesisParams;
 use sov_rollup_interface::stf::{
     ApplySlotOutput, BatchReceipt, ExecutionContext, StateTransitionFunction,
 };
-use sov_rollup_interface::zk::Zkvm;
 use sov_state::{
     ArrayWitness, NativeStorage, ProverStorage, SlotKey, SlotValue, StateAccesses, Storage,
 };
 
 use super::*;
+// We need a proof receipt type whose first and last generics are serializable, and middle two params are daspec and state root.
+// This is never constructed - just used to satisfy the type checker.
+type DummyProofReceipt = PartialProofReceipt<u64, MockDaSpec, StateRoot, u64>;
 
 const DA_POLLING_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
@@ -61,9 +62,7 @@ impl GenesisParams for MockGenesisParams {
 #[derive(PartialEq, Debug, Clone, Eq, serde::Serialize, serde::Deserialize, Default)]
 pub struct MockStf;
 
-impl<InnerVm: Zkvm, OuterVm: Zkvm, Da: DaSpec> StateTransitionFunction<InnerVm, OuterVm, Da>
-    for MockStf
-{
+impl<Da: DaSpec> StateTransitionFunction<Da> for MockStf {
     type StateRoot = <ProverStorage<S> as Storage>::Root;
     type Address = Vec<u8>;
     type GenesisParams = MockGenesisParams;
@@ -93,8 +92,8 @@ impl<InnerVm: Zkvm, OuterVm: Zkvm, Da: DaSpec> StateTransitionFunction<InnerVm, 
         _slot_header: &Da::BlockHeader,
         _relevant_blobs: RelevantBlobIters<&mut [<Da as DaSpec>::BlobTransaction]>,
         _execution_context: ExecutionContext,
-    ) -> ApplySlotOutput<InnerVm, OuterVm, Da, Self> {
-        ApplySlotOutput::<InnerVm, OuterVm, Da, Self> {
+    ) -> ApplySlotOutput<Da, Self> {
+        ApplySlotOutput::<Da, Self> {
             state_root: <ProverStorage<S> as Storage>::PRE_GENESIS_ROOT,
             change_set: (),
             proof_receipts: vec![],
@@ -111,15 +110,12 @@ impl<InnerVm: Zkvm, OuterVm: Zkvm, Da: DaSpec> StateTransitionFunction<InnerVm, 
     }
 }
 
-type Vm = MockZkvm;
 type S = sov_state::DefaultStorageSpec<sha2::Sha256>;
 type Stf = MockStf;
-type StateRoot = <Stf as StateTransitionFunction<Vm, Vm, MockDaSpec>>::StateRoot;
-type TestBatchReceiptContents =
-    <Stf as StateTransitionFunction<Vm, Vm, MockDaSpec>>::BatchReceiptContents;
-type TestTxReceiptContents =
-    <Stf as StateTransitionFunction<Vm, Vm, MockDaSpec>>::TxReceiptContents;
-type Witness = <Stf as StateTransitionFunction<Vm, Vm, MockDaSpec>>::Witness;
+type StateRoot = <Stf as StateTransitionFunction<MockDaSpec>>::StateRoot;
+type TestBatchReceiptContents = <Stf as StateTransitionFunction<MockDaSpec>>::BatchReceiptContents;
+type TestTxReceiptContents = <Stf as StateTransitionFunction<MockDaSpec>>::TxReceiptContents;
+type Witness = <Stf as StateTransitionFunction<MockDaSpec>>::Witness;
 type MockSlotCommit = SlotCommit<MockBlock, Witness, TestTxReceiptContents>;
 type TestStateManager<Da> = StateManager<
     StateRoot,
@@ -322,6 +318,7 @@ async fn test_reorg_happened_correct_block_returned() -> anyhow::Result<()> {
                     transition_witness,
                     slot_commit,
                     Vec::new(),
+                    Vec::<DummyProofReceipt>::new(),
                 )
                 .await?;
             check_internal_consistency(&state_manager, finality as usize);
@@ -407,6 +404,7 @@ async fn test_save_last_finalized_larger_than_seen_latest_seen_transition() -> a
             transition_witness,
             slot_commit,
             Vec::new(),
+            Vec::<DummyProofReceipt>::new(),
         )
         .await?;
     check_internal_consistency(&state_manager, finality as usize);
@@ -517,6 +515,7 @@ async fn test_progressing_with_shuffle(
                 transition_witness,
                 slot_commit,
                 Vec::new(),
+                Vec::<DummyProofReceipt>::new(),
             )
             .await?;
         check_internal_consistency(&state_manager, finality as usize);
@@ -733,6 +732,7 @@ async fn test_with_frequent_periodic_batch_production() -> anyhow::Result<()> {
                 transition_witness,
                 slot_commit,
                 Vec::new(),
+                Vec::<DummyProofReceipt>::new(),
             )
             .await?;
         check_internal_consistency(&state_manager, finality as usize);
@@ -830,6 +830,7 @@ async fn test_chain_progress_between_prepare_storage_and_save_changes(
                 transition_witness,
                 slot_commit,
                 Vec::new(),
+                Vec::<DummyProofReceipt>::new(),
             )
             .await?;
         check_internal_consistency(&state_manager, finality as usize);
@@ -1274,6 +1275,7 @@ async fn process_continuous_transition(
             transition_witness,
             slot_commit,
             Vec::new(),
+            Vec::<DummyProofReceipt>::new(),
         )
         .await?;
     check_internal_consistency(state_manager, finality as usize);
@@ -1555,6 +1557,7 @@ async fn test_progressing_with_rewind_below_finalized(
                 transition_witness,
                 slot_commit,
                 Vec::new(),
+                Vec::<DummyProofReceipt>::new(),
             )
             .await?;
         // Skip check_internal_consistency - this test exercises abnormal DA behavior
@@ -1622,6 +1625,7 @@ async fn test_binary_search_handles_da_error() -> anyhow::Result<()> {
                 transition_witness,
                 slot_commit,
                 Vec::new(),
+                Vec::<DummyProofReceipt>::new(),
             )
             .await?;
     }
@@ -1720,6 +1724,7 @@ async fn test_reorg_during_binary_search() -> anyhow::Result<()> {
                 transition_witness,
                 slot_commit,
                 Vec::new(),
+                Vec::<DummyProofReceipt>::new(),
             )
             .await?;
     }
@@ -1771,6 +1776,7 @@ async fn test_reorg_during_binary_search() -> anyhow::Result<()> {
             transition_witness,
             slot_commit,
             Vec::new(),
+            Vec::<DummyProofReceipt>::new(),
         )
         .await?;
 
@@ -1890,6 +1896,7 @@ async fn test_finalized_height_monotonic() -> anyhow::Result<()> {
                 transition_witness,
                 slot_commit,
                 Vec::new(),
+                Vec::<DummyProofReceipt>::new(),
             )
             .await?;
 

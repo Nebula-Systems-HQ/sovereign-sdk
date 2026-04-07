@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use alloy::signers::local::PrivateKeySigner;
 use alloy_primitives::U256;
 use sov_demo_rollup::mock_da_risc0_host_args;
-use sov_demo_rollup::MockNomtDemoRollup;
+use sov_demo_rollup::MockDemoRollup;
 use sov_evm::execution_config::EvmExecutionConfigContents;
 use sov_evm_test_utils::SimpleStorage;
 use sov_evm_test_utils::Submit;
@@ -26,7 +26,7 @@ pub(crate) async fn start_node_with_ram_pinning(
     _rollup_prover_config: RollupProverConfig<Risc0>,
     location: TempDir,
     exec_config_path: PathBuf,
-) -> TestRollup<MockNomtDemoRollup<Native>> {
+) -> TestRollup<MockDemoRollup<Native>> {
     let storage_path = StoragePath::Tmp(std::sync::Arc::new(location));
     // Don't provide a prover since the EVM is not currently provable
     RollupBuilder::new_with_storage_path_and_exec_config(
@@ -75,7 +75,7 @@ async fn test_ram_pinning_config_updates() -> anyhow::Result<()> {
     let test_rollup =
         start_node_with_ram_pinning(RollupProverConfig::Skip, temp_dir, exec_config_path.clone())
             .await;
-    test_rollup.wait_for_next_blocks(1).await;
+    test_rollup.wait_for_rollup_height_advance_by(1).await;
     let client = alloy_client_with_signer(test_rollup.http_addr, SENDER_PRIV_KEY);
 
     tracing::info!("Deploying contract");
@@ -116,7 +116,7 @@ async fn test_contract_not_pinned_on_touch() -> anyhow::Result<()> {
     let test_rollup =
         start_node_with_ram_pinning(RollupProverConfig::Skip, temp_dir, exec_config_path.clone())
             .await;
-    test_rollup.wait_for_next_blocks(1).await;
+    test_rollup.wait_for_rollup_height_advance_by(1).await;
     let client = alloy_client_with_signer(test_rollup.http_addr, SECONDARY_SENDER_PRIV_KEY);
     let client_with_non_prvileged_signer =
         alloy_client_with_signer(test_rollup.http_addr, SENDER_PRIV_KEY);

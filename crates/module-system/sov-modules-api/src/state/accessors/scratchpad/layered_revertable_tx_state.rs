@@ -13,6 +13,7 @@ use super::super::{BorshSerializedSize, StateMetricsProvider, UniversalStateAcce
 use crate::module::Spec;
 use crate::state::traits::delegate_version_reader;
 use crate::state::traits::PerBlockCache;
+use crate::transaction::PriorityFeeBips;
 use crate::{
     AccessoryStateWriter, Amount, BasicGasMeter, Gas, GasArray, GasBiller, GasBillingError,
     GasMeter, GasMeteringError, ProvableStateReader, ProvableStateWriter, TxState,
@@ -39,9 +40,12 @@ pub struct GasSnapshot<S: Spec> {
     /// `None` when funds tracking is not enabled (e.g. gas-free layers in tests).
     pub outer_remaining_funds: Option<Amount>,
     /// Amount charged upfront when layer was created (for refund calculation).
+    /// Includes both base gas cost and priority fee reservation.
     pub upfront_charge: Amount,
     /// Gas price at layer creation (for refund calculation).
     pub gas_price: <S::Gas as Gas>::Price,
+    /// Priority fee rate in basis points (1 bip = 0.01%).
+    pub priority_fee_bips: PriorityFeeBips,
 }
 
 /// Billing info extracted from a layer before it's consumed (committed/reverted).
@@ -235,6 +239,13 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         self.last_gas_consumed
     }
 
+    /// Clears the last_gas_consumed value.
+    /// Call before dispatching to prevent stale reads when a dispatch
+    /// fails at layer creation (e.g. InsufficientPayerBalance).
+    pub fn clear_last_gas_consumed(&mut self) {
+        self.last_gas_consumed = None;
+    }
+
     /// Adds a new revertable layer on top of the current layers.
     /// This pushes a new layer onto the layers stack.
     pub fn add_revertable_layer(&mut self) -> &mut Self {
@@ -257,6 +268,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                 outer_remaining_funds: meter.remaining_funds,
                 upfront_charge: Amount::ZERO,
                 gas_price: meter.gas_price,
+                priority_fee_bips: PriorityFeeBips::ZERO,
             };
             meter.initial_gas = S::Gas::MAX;
             meter.remaining_gas = S::Gas::MAX;
@@ -269,6 +281,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                 outer_remaining_funds: None,
                 upfront_charge: Amount::ZERO,
                 gas_price: <S::Gas as Gas>::Price::ZEROED,
+                priority_fee_bips: PriorityFeeBips::ZERO,
             }
         };
         self.layers.push(StateLayer::new_gas_free(snapshot));
@@ -305,9 +318,15 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         gas_limit: S::Gas,
         sequencer: &S::Address,
         biller: &mut B,
+        priority_fee_bips: u64,
     ) -> Result<&mut Self, GasPayerError<S::Gas>> {
-        let gas_snapshot =
-            self.validate_and_swap_gas_payer(gas_payer, gas_limit, sequencer, biller)?;
+        let gas_snapshot = self.validate_and_swap_gas_payer(
+            gas_payer,
+            gas_limit,
+            sequencer,
+            biller,
+            priority_fee_bips,
+        )?;
         self.layers
             .push(StateLayer::new_with_gas_payer(gas_payer, gas_snapshot));
         Ok(self)
@@ -328,6 +347,7 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         gas_limit: S::Gas,
         sequencer: &S::Address,
         biller: &mut B,
+        priority_fee_bips: u64,
     ) -> Result<GasSnapshot<S>, GasPayerError<S::Gas>> {
         // Phase 1: Read meter values (borrow meter, extract values, drop borrow)
         let (initial_gas, remaining_gas, remaining_funds, gas_cost, gas_price) = {
@@ -345,8 +365,20 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                 .remaining_funds
                 .ok_or(GasPayerError::FundsTrackingNotEnabled)?;
 
-            (meter.initial_gas, meter.remaining_gas, remaining_funds, gas_cost, gas_price)
+            (
+                meter.initial_gas,
+                meter.remaining_gas,
+                remaining_funds,
+                gas_cost,
+                gas_price,
+            )
         }; // meter borrow dropped
+
+        // Include priority fee in the upfront reservation so the full amount is locked
+        // before execution. upfront = base_cost + priority_fee(base_cost)
+        let priority_fee_bips = PriorityFeeBips(priority_fee_bips);
+        let priority_reservation = priority_fee_bips.apply(gas_cost).unwrap_or(Amount::ZERO);
+        let upfront_charge = Amount(gas_cost.0.saturating_add(priority_reservation.0));
 
         // Phase 2: Read gas payer's balance (borrow self.inner as StateAccessor)
         let payer_balance = biller
@@ -355,19 +387,19 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
                 payer: format!("{:?}", gas_payer),
             })?;
 
-        // Validate gas payer can afford the gas limit
-        if payer_balance < gas_cost {
+        // Validate gas payer can afford the gas limit + priority fee
+        if payer_balance < upfront_charge {
             return Err(GasPayerError::InsufficientPayerBalance {
-                required: gas_cost,
+                required: upfront_charge,
                 available: payer_balance,
             });
         }
 
-        // Phase 3: Charge upfront - transfer gas_cost from payer to sequencer
+        // Phase 3: Charge upfront - transfer upfront_charge from payer to sequencer
         // This ensures the payment is secured before execution begins
-        if gas_cost > Amount::ZERO {
+        if upfront_charge > Amount::ZERO {
             biller
-                .transfer_gas_tokens(&gas_payer, sequencer, gas_cost, self.inner)
+                .transfer_gas_tokens(&gas_payer, sequencer, upfront_charge, self.inner)
                 .map_err(GasPayerError::BillingError)?;
         }
 
@@ -376,15 +408,16 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
             outer_initial_gas: initial_gas,
             outer_remaining_gas: remaining_gas,
             outer_remaining_funds: Some(remaining_funds),
-            upfront_charge: gas_cost,
+            upfront_charge,
             gas_price,
+            priority_fee_bips,
         };
 
         if let Some(meter) = self.inner.try_as_basic_gas_meter() {
-            // Perform the meter swap: set remaining_funds to the gas limit cost
+            // Perform the meter swap: set remaining_funds to the upfront charge
             // and set remaining_gas to the requested gas_limit to give the gas payer
             // an independent budget (not constrained by outer meter's remaining_gas)
-            meter.remaining_funds = Some(gas_cost);
+            meter.remaining_funds = Some(upfront_charge);
             meter.initial_gas = gas_limit;
             meter.remaining_gas = gas_limit;
         }
@@ -428,12 +461,21 @@ impl<'a, S: Spec, I: TxState<S>> LayeredRevertableTxState<'a, S, I> {
         // Phase 1: Calculate actual gas cost using stored gas_price
         let actual_cost = info.gas_consumed.value(info.gas_snapshot.gas_price);
 
+        // Priority fee is charged on actual consumption only
+        let actual_priority_fee = info
+            .gas_snapshot
+            .priority_fee_bips
+            .apply(actual_cost)
+            .unwrap_or(Amount::ZERO);
+        let actual_total = Amount(actual_cost.0.saturating_add(actual_priority_fee.0));
+
         // Phase 2: Calculate and transfer refund (borrow self.inner as StateAccessor)
         // Upfront charge was already paid at layer creation, now refund unused portion
+        // Refund = upfront - actual_total (unused base gas + unused priority fee reservation)
         let refund = info
             .gas_snapshot
             .upfront_charge
-            .checked_sub(actual_cost)
+            .checked_sub(actual_total)
             .unwrap_or(Amount::ZERO);
 
         if refund > Amount::ZERO {
@@ -889,7 +931,7 @@ mod tests {
     use sov_test_utils::storage::SimpleStorageManager;
     use sov_test_utils::{MockDaSpec, MockZkvm};
 
-    type TestSpec = crate::default_spec::DefaultSpec<MockDaSpec, MockZkvm, MockZkvm, Native>;
+    type TestSpec = crate::default_spec::DefaultNomtSpec<MockDaSpec, MockZkvm, MockZkvm, Native>;
 
     /// Mock biller for testing gas payer layers without a real Bank.
     struct MockBiller {
@@ -897,6 +939,10 @@ mod tests {
         balance: Option<Amount>,
         /// Track total amount transferred (for test assertions)
         total_transferred: Amount,
+        /// Track total amount refunded (sequencer → payer transfers)
+        total_refunded: Amount,
+        /// The sequencer address, used to detect refund direction
+        sequencer: Option<<TestSpec as crate::Spec>::Address>,
     }
 
     impl MockBiller {
@@ -904,6 +950,20 @@ mod tests {
             Self {
                 balance: Some(balance),
                 total_transferred: Amount::ZERO,
+                total_refunded: Amount::ZERO,
+                sequencer: None,
+            }
+        }
+
+        fn with_balance_and_sequencer(
+            balance: Amount,
+            sequencer: <TestSpec as crate::Spec>::Address,
+        ) -> Self {
+            Self {
+                balance: Some(balance),
+                total_transferred: Amount::ZERO,
+                total_refunded: Amount::ZERO,
+                sequencer: Some(sequencer),
             }
         }
     }
@@ -919,12 +979,20 @@ mod tests {
 
         fn transfer_gas_tokens(
             &mut self,
-            _from: &S::Address,
+            from: &S::Address,
             _to: &S::Address,
             amount: Amount,
             _state: &mut impl StateAccessor,
         ) -> Result<(), GasBillingError> {
             self.total_transferred = self.total_transferred.checked_add(amount).unwrap();
+            // Detect refund: sequencer is the sender
+            if let Some(ref seq) = self.sequencer {
+                let seq_bytes = borsh::to_vec(seq).unwrap();
+                let from_bytes = borsh::to_vec(from).unwrap();
+                if seq_bytes == from_bytes {
+                    self.total_refunded = self.total_refunded.checked_add(amount).unwrap();
+                }
+            }
             Ok(())
         }
     }
@@ -1685,6 +1753,7 @@ mod tests {
                 gas_limit,
                 &sequencer,
                 &mut biller,
+                0,
             )
             .unwrap();
 
@@ -1721,7 +1790,7 @@ mod tests {
         let gas_limit = <TestSpec as Spec>::Gas::ZEROED;
         let mut biller = MockBiller::with_balance(Amount::MAX);
         layered_state
-            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller)
+            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller, 0)
             .unwrap();
 
         // Write data in gas payer layer
@@ -1771,7 +1840,7 @@ mod tests {
         let gas_limit = <TestSpec as Spec>::Gas::ZEROED;
         let mut biller = MockBiller::with_balance(Amount::MAX);
         layered_state
-            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller)
+            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller, 0)
             .unwrap();
         layered_state.set_value(namespace, &inner_key, inner_value.clone());
 
@@ -1822,7 +1891,7 @@ mod tests {
         let gas_limit = <TestSpec as Spec>::Gas::from([50u64, 50u64]);
         let mut biller = MockBiller::with_balance(Amount::MAX);
         layered_state
-            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller)
+            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller, 0)
             .unwrap();
 
         // Write data
@@ -1874,7 +1943,7 @@ mod tests {
         let gas_limit = <TestSpec as Spec>::Gas::ZEROED;
         let mut biller = MockBiller::with_balance(Amount::MAX);
         layered_state
-            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller)
+            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller, 0)
             .unwrap();
 
         // Initially, gas_consumed should be ZEROED
@@ -1910,7 +1979,7 @@ mod tests {
         let gas_limit = <TestSpec as Spec>::Gas::from([100u64, 100u64]); // Well under our 1000 funds
         let mut biller = MockBiller::with_balance(Amount::MAX);
         layered_state
-            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller)
+            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller, 0)
             .unwrap();
 
         // Verify snapshot captured the OUTER payer's funds (before meter swap)
@@ -1995,6 +2064,7 @@ mod tests {
             large_gas_limit,
             &sequencer,
             &mut biller,
+            0,
         );
         // Should succeed - gas payer gets independent budget
         assert!(
@@ -2035,6 +2105,7 @@ mod tests {
             zero_gas_limit,
             &sequencer,
             &mut biller,
+            0,
         );
         assert!(result.is_ok(), "Zero gas limit should be allowed");
     }
@@ -2062,7 +2133,7 @@ mod tests {
         let mut biller = MockBiller::with_balance(Amount::MAX);
 
         layered_state
-            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller)
+            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller, 0)
             .expect("Should create gas payer layer");
 
         // Simulate gas consumption by charging the meter
@@ -2115,7 +2186,7 @@ mod tests {
         let mut biller = MockBiller::with_balance(Amount::MAX);
 
         layered_state
-            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller)
+            .add_revertable_layer_with_gas_payer(gas_payer, gas_limit, &sequencer, &mut biller, 0)
             .expect("Should create gas payer layer");
 
         // Write some data (this will be reverted)
@@ -2188,5 +2259,77 @@ mod tests {
         let mut metric = StateAccessMetric::new_read();
         let read_value = layered_state.get_value(namespace, &key, &mut metric);
         assert_eq!(read_value, Some(value), "Data should be committed");
+    }
+
+    #[test]
+    fn test_priority_fee_bips_billing() {
+        use crate::{Amount, Gas, GasMeter, Spec};
+        let storage_manager = SimpleStorageManager::new();
+        let storage = storage_manager.create_storage();
+
+        // gas_price = 1 per dimension, so gas cost = sum of dimension values
+        let gas_price = <<TestSpec as Spec>::Gas as Gas>::Price::from([Amount::new(1); 2]);
+        let initial_funds = Amount::new(10_000);
+        let mut working_set =
+            WorkingSet::<TestSpec>::new_with_gas_meter(storage, initial_funds, &gas_price);
+
+        let mut layered_state = LayeredRevertableTxState::new(&mut working_set);
+
+        let gas_payer = <TestSpec as crate::Spec>::Address::from([1u8; 28]);
+        let sequencer = <TestSpec as crate::Spec>::Address::from([2u8; 28]);
+        let gas_limit = <TestSpec as Spec>::Gas::from([100u64, 100u64]);
+
+        // 500 bips = 5% priority fee
+        let priority_fee_bips = 500u64;
+        let mut biller = MockBiller::with_balance_and_sequencer(Amount::MAX, sequencer);
+
+        layered_state
+            .add_revertable_layer_with_gas_payer(
+                gas_payer,
+                gas_limit,
+                &sequencer,
+                &mut biller,
+                priority_fee_bips,
+            )
+            .unwrap();
+
+        // Upfront charge should be gas_cost + 5% = 200 + 10 = 210
+        let gas_cost = gas_limit.value(gas_price); // 100*1 + 100*1 = 200
+        let expected_upfront = Amount::new(gas_cost.0 + gas_cost.0 * 500 / 10_000); // 210
+        assert_eq!(
+            biller.total_transferred, expected_upfront,
+            "Upfront charge should include 5% priority fee"
+        );
+
+        // Consume 40 gas per dimension (80 total cost at price=1)
+        let gas_to_charge = <TestSpec as Spec>::Gas::from([40u64, 40u64]);
+        if let Some(meter) = layered_state.inner.try_as_basic_gas_meter() {
+            meter.charge_gas(gas_to_charge).expect("Should charge gas");
+        }
+        layered_state.track_gas_in_layer(gas_to_charge);
+
+        // Commit — should refund unused portion
+        layered_state
+            .commit_layer(&mut biller, &sequencer)
+            .expect("commit_layer should succeed");
+
+        // actual_cost = 80, actual_priority = 80 * 500 / 10_000 = 4, actual_total = 84
+        // refund = 210 - 84 = 126
+        let actual_cost = gas_to_charge.value(gas_price); // 80
+        let actual_priority = Amount::new(actual_cost.0 * 500 / 10_000); // 4
+        let actual_total = Amount::new(actual_cost.0 + actual_priority.0); // 84
+        let expected_refund = Amount::new(expected_upfront.0 - actual_total.0); // 126
+
+        assert_eq!(
+            biller.total_refunded, expected_refund,
+            "Refund should return unused gas + unused priority fee reservation"
+        );
+
+        // Net cost to payer = upfront - refund = actual_total = 84
+        let net_cost = Amount::new(expected_upfront.0 - biller.total_refunded.0);
+        assert_eq!(
+            net_cost, actual_total,
+            "Net cost should equal actual gas + actual priority fee"
+        );
     }
 }

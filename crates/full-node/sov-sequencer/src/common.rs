@@ -12,7 +12,9 @@ use axum::http::StatusCode;
 use borsh::{BorshDeserialize, BorshSerialize};
 use sov_blob_sender::{BlobExecutionStatus, BlobInternalId, BlobSenderHooks};
 use sov_db::ledger_db::LedgerDb;
-use sov_modules_api::capabilities::{AuthenticationOutput, RollupHeight, TransactionAuthenticator};
+use sov_modules_api::capabilities::{
+    AuthenticationError, AuthenticationOutput, FatalError, RollupHeight, TransactionAuthenticator,
+};
 use sov_modules_api::rest::utils::ErrorObject;
 use sov_modules_api::rest::{ApiState, StateUpdateReceiver};
 use sov_modules_api::*;
@@ -223,8 +225,8 @@ pub trait Sequencer: Clone + Send + Sync + 'static {
     /// Can be used to query and update the status of transactions.
     fn tx_status_manager(&self) -> &TxStatusManager<<Self::Spec as Spec>::Da>;
 
-    /// Closes the current batch.
-    async fn force_close_current_batch(&self) -> anyhow::Result<()> {
+    /// Closes the current batch, if one is in progress. Returns true if the batch was closed successfully, false if there was no batch in progress.
+    async fn force_close_current_batch(&self) -> anyhow::Result<bool> {
         panic!("Not implemented")
     }
 
@@ -267,6 +269,15 @@ pub struct StateUpdateNotification {
     pub slot_number: SlotNumber,
     /// The finalized slot number.
     pub finalized_slot_number: SlotNumber,
+    /// True when the update loop explicitly skipped processing because
+    /// `SOV_TEST_PAUSE_SEQUENCER_UPDATE_STATE=1` was observed.
+    #[cfg(feature = "test-utils")]
+    #[serde(default)]
+    pub update_skipped_due_to_pause: bool,
+    /// True when the sequencer entered recovery on this state update.
+    #[cfg(feature = "test-utils")]
+    #[serde(default)]
+    pub triggered_recovery: bool,
 }
 
 /// A notification that the sequencer has processed a forced (non-preferred) batch.
@@ -494,14 +505,18 @@ pub async fn loop_send_tx_notifications<S: Spec, Rt: RuntimeEventProcessor>(
     // `Arc<Mutex<...>>` is, I suspect, overkill here. It's just a workaround
     // around the `FnMut` closure issues I was banging my head against while writing
     // this.
-    let latest_processed_slot_number =
-        Arc::new(Mutex::new(state_update_receiver.borrow().slot_number));
+    // This cursor tracks the next slot that still needs notification processing.
+    // Initializing to `current + 1` avoids re-processing historical slots on startup.
+    let next_slot_to_process = Arc::new(Mutex::new(
+        state_update_receiver.borrow().slot_number.next(),
+    ));
 
     react_to_state_updates::<S, _>(state_update_receiver, shutdown_receiver, "loop_send_tx_notifications", move |info| {
-        let latest_processed_slot_number = latest_processed_slot_number.clone();
+        let next_slot_to_process = next_slot_to_process.clone();
         async move {
             let storage_slot_number = info.slot_number;
-            let range = latest_processed_slot_number.lock().await.range_inclusive(storage_slot_number);
+            let start_slot_number = *next_slot_to_process.lock().await;
+            let range = start_slot_number.range_inclusive(storage_slot_number);
 
             trace!(%storage_slot_number, "Querying slot data from node to notify about transaction status");
 
@@ -529,7 +544,7 @@ pub async fn loop_send_tx_notifications<S: Spec, Rt: RuntimeEventProcessor>(
                     }
                 }
             }
-            *latest_processed_slot_number.lock().await = info.slot_number;
+            *next_slot_to_process.lock().await = info.slot_number.next();
 
             Ok(())
         }
@@ -557,11 +572,46 @@ pub fn pre_exec_err_to_accept_tx_err(err: PreExecError) -> ErrorObject {
             ErrorObject {
                 status: StatusCode::BAD_REQUEST,
                 message: "The transaction is invalid".to_string(),
-                details: json_obj!({
-                    "error": error.to_string()
-                })
+                details: to_json_object(AcceptTxErrorDetails::from_auth_error(&error)),
             }
         },
+    }
+}
+
+/// Stable machine-readable codes for `accept_tx` failures that wrappers may remap to
+/// transport-specific error objects.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AcceptTxErrorCode {
+    /// The transaction's `maxFeePerGas` was below the rollup base fee.
+    InsufficientMaxFeePerGas,
+}
+
+/// Structured details attached to `accept_tx` failures.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct AcceptTxErrorDetails {
+    /// Optional stable machine-readable code for callers that need deterministic remapping.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<AcceptTxErrorCode>,
+    /// Human-readable underlying error string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl AcceptTxErrorDetails {
+    /// Builds structured `accept_tx` details from an authentication error.
+    pub fn from_auth_error(error: &AuthenticationError) -> Self {
+        let code = match error {
+            AuthenticationError::FatalError(FatalError::InsufficientMaxFeePerGas { .. }, _) => {
+                Some(AcceptTxErrorCode::InsufficientMaxFeePerGas)
+            }
+            _ => None,
+        };
+
+        Self {
+            code,
+            error: Some(error.to_string()),
+        }
     }
 }
 

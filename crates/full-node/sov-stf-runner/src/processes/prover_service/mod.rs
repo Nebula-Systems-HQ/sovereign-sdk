@@ -1,12 +1,12 @@
+mod network;
 mod parallel;
-
-mod block_proof;
 
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use borsh::BorshSerialize;
+pub use network::NetworkProverService;
 pub use parallel::ParallelProverService;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -19,6 +19,13 @@ use thiserror::Error;
 
 pub use crate::processes::StateTransitionInfo;
 
+pub(crate) struct Verifier<Da>
+where
+    Da: DaService,
+{
+    pub(crate) da_verifier: Da::Verifier,
+}
+
 /// The possible configurations of the prover
 // We use arcs for cheap cloning
 #[derive(Clone)]
@@ -29,6 +36,16 @@ pub enum RollupProverConfig<Vm: Zkvm> {
     Execute(Arc<<Vm::Host as ZkvmHost>::HostArgs>),
     /// Run the rollup verifier and create a SNARK of execution.
     Prove(Arc<<Vm::Host as ZkvmHost>::HostArgs>),
+}
+
+impl<Vm: Zkvm> RollupProverConfig<Vm> {
+    /// Returns `true` if witness generation is needed for this prover configuration.
+    ///
+    /// Only [`Execute`](Self::Execute) and [`Prove`](Self::Prove) require witness data;
+    /// [`Skip`](Self::Skip) does not run the verifier, so recording witness hints is wasted work.
+    pub fn needs_witness(&self) -> bool {
+        !matches!(self, Self::Skip)
+    }
 }
 
 /// The associated discriminants of [`RollupProverConfig`]. Possible configurations of the prover
