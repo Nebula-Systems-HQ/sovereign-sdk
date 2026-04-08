@@ -2,6 +2,11 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::ops::Range;
 
+/// Maximum page size for the `/ledger/events` list endpoint.
+/// Larger than the general pagination limit because one bulk request
+/// is far cheaper than many individual HTTP round-trips.
+const EVENTS_PAGE_SIZE_MAX: u64 = 10_000;
+
 use axum::extract::{Request, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::middleware::Next;
@@ -343,10 +348,6 @@ where
         }
     }
 
-    // TODO: we're going to want to start using range/iters
-    // when retrieving events from ledger db.
-    // With that in mind we're using cursor based pagination
-    // so the implementation can be updated without changing the REST API interface.
     async fn list_events(
         State(state): State<LedgerState<T>>,
         pagination_opt: Option<Query<Pagination<String>>>,
@@ -356,6 +357,7 @@ where
             Some(Query(pagination)) => pagination,
             None => Default::default(),
         };
+        let size = (pagination.size as u64).min(EVENTS_PAGE_SIZE_MAX);
         let start = match pagination.selection {
             PageSelection::Next { cursor } => cursor
                 .parse::<u64>()
@@ -363,17 +365,13 @@ where
             PageSelection::First => 0,
             PageSelection::Last => return Err(errors::not_implemented_501()),
         };
-        let end = start.saturating_add(pagination.size as u64);
-        let nums = (start..=end)
-            .map(EventIdentifier::Number)
-            .collect::<Vec<_>>();
+        let end = start.checked_add(size).unwrap_or(u64::MAX);
         let events = state
             .ledger
-            .get_events::<RuntimeEventResponse<E>>(nums.as_slice())
+            .get_events_range::<RuntimeEventResponse<E>>(start, end)
             .await
             .map_err(errors::database_error_response_500)?
             .into_iter()
-            .flatten()
             .filter(|event| {
                 if let Some(prefix) = &event_key_prefix_opt {
                     event.key.starts_with(&prefix.prefix)
