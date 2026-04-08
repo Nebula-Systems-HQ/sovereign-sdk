@@ -365,7 +365,7 @@ where
             PageSelection::First => 0,
             PageSelection::Last => return Err(errors::not_implemented_501()),
         };
-        let end = start.checked_add(size).unwrap_or(u64::MAX);
+        let end = start.saturating_add(size);
         let events = state
             .ledger
             .get_events_range::<RuntimeEventResponse<E>>(start, end)
