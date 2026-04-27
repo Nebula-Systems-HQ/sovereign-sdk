@@ -1166,6 +1166,7 @@ impl<S: Spec> BlobStorage<S> {
                     tracing::error!(
                         error = ?e,
                         sequence_number = encrypted_batch.sequence_number,
+                        version = encrypted_batch.encryption_format_version,
                         "STF: Failed to decrypt preferred batch"
                     );
                     self.sequencer_registry
@@ -1184,9 +1185,10 @@ impl<S: Spec> BlobStorage<S> {
         };
 
         tracing::debug!(
-            "STF: Decrypted batch #{} with {} transactions",
-            encrypted_batch.sequence_number,
-            txs.len(),
+            sequence_number = encrypted_batch.sequence_number,
+            version = encrypted_batch.encryption_format_version,
+            tx_count = txs.len(),
+            "STF: Decrypted preferred batch"
         );
 
         Some(PreferredBatchData {
@@ -1422,6 +1424,12 @@ mod tests {
             tx_hashes: std::sync::Arc::new(vec![]),
         };
 
+        let wrapper = PreferredBlobData::EncryptedBatch(encrypted.clone());
+        assert_eq!(wrapper.sequence_number(), 11);
+
+        let PreferredBlobData::EncryptedBatch(encrypted) = wrapper else {
+            unreachable!("wrapper was constructed as an encrypted batch");
+        };
         let decrypted_bytes = layer.decrypt(&encrypted.encrypted_txs_data).unwrap();
         let decoded =
             std::sync::Arc::<Vec<sov_modules_api::FullyBakedTx>>::try_from_slice(&decrypted_bytes)
