@@ -2,6 +2,7 @@ use std::env;
 
 use futures::StreamExt;
 use sov_blob_sender::BlobSelectorStatus;
+use sov_encryption::BatchEncryptionConfig;
 use sov_mock_da::BlockProducingConfig;
 use sov_mock_zkvm::crypto::private_key::Ed25519PrivateKey;
 use sov_modules_api::prelude::*;
@@ -23,7 +24,10 @@ use crate::preferred_end_to_end::{
     setup_test_rollup_with_initial_state, InvalidGeneration, TestBlueprint, TestRuntime, TestState,
     TestingAction,
 };
-use crate::utils::{new_test_rollup, tempdir_inside_codebase_dir, MAX_BATCH_EXECUTION_TIME_MILLIS};
+use crate::utils::{
+    new_test_rollup, new_test_rollup_with_batch_encryption, tempdir_inside_codebase_dir,
+    MAX_BATCH_EXECUTION_TIME_MILLIS,
+};
 
 async fn create_test_rollup() -> (TestRollup<TestBlueprint>, TestUser<TestSpec>) {
     let genesis_config =
@@ -71,6 +75,56 @@ async fn create_test_rollup() -> (TestRollup<TestBlueprint>, TestUser<TestSpec>)
         .await,
         admin,
     )
+}
+
+async fn create_encrypted_test_rollup() -> (TestRollup<TestBlueprint>, TestUser<TestSpec>) {
+    let genesis_config =
+        HighLevelOptimisticGenesisConfig::generate().add_accounts_with_default_balance(1);
+    let admin = genesis_config.additional_accounts()[0].clone();
+
+    let rt_genesis_config =
+        <TestRuntime<TestSpec> as Runtime<TestSpec>>::GenesisConfig::from_minimal_config(
+            genesis_config.into(),
+            ValueSetterConfig {
+                admin: admin.address(),
+            },
+            (),
+            PaymasterConfig::default(),
+            (),
+            (),
+        );
+
+    let genesis_params = GenesisParams {
+        runtime: rt_genesis_config.clone(),
+    };
+
+    let dir = tempdir_inside_codebase_dir();
+
+    let test_rollup = new_test_rollup_with_batch_encryption::<TestRuntime<TestSpec>>(
+        dir,
+        genesis_params
+            .runtime
+            .sequencer_registry
+            .sequencer_config
+            .seq_da_address,
+        genesis_params,
+        0,
+        true,
+        TEST_MAX_BATCH_SIZE,
+        BlockProducingConfig::Periodic { block_time_ms: 300 },
+        None,
+        TEST_BLOB_PROCESSING_TIMEOUT,
+        MAX_BATCH_EXECUTION_TIME_MILLIS,
+        None,
+        0,
+        Some(BatchEncryptionConfig::Static {
+            encryption_key: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+                .to_string(),
+        }),
+    )
+    .await;
+
+    (test_rollup, admin)
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -142,6 +196,36 @@ async fn test_blobs_are_send_after_rollup_resync() {
             panic!("In a resync scenario, the state update notification should occur before the blob sender transmits the blobs.")
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_encrypted_preferred_batch_is_published_and_executed() {
+    sov_test_utils::initialize_logging();
+    let (test_rollup, admin) = create_encrypted_test_rollup().await;
+
+    test_rollup.produce_enough_finalized_slots().await;
+    test_rollup.wait_for_sequencer_ready().await.unwrap();
+
+    let client = test_rollup.api_client().clone();
+    let tx = tx_set_many_values(&admin.private_key, 0, vec![9, 9, 9]);
+    client.send_raw_tx_to_sequencer(&tx).await.unwrap();
+
+    test_rollup.da_service.produce_block_now().await.unwrap();
+    test_rollup.wait_for_rollup_height_advance_by(1).await;
+
+    #[derive(Debug, serde::Deserialize)]
+    struct IdxResponse {
+        #[allow(unused)]
+        index: u64,
+        value: Option<u8>,
+    }
+
+    let many_values_response = test_rollup
+        .client
+        .query_rest_endpoint::<IdxResponse>("/modules/value-setter/state/many-values/items/0")
+        .await
+        .unwrap();
+    assert_eq!(many_values_response.value, Some(9));
 }
 
 fn tx_set_many_values(key: &Ed25519PrivateKey, nonce: u64, values_to_set: Vec<u8>) -> RawTx {
