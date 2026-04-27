@@ -32,7 +32,7 @@ pub fn main() {
             NomtStorage,
         >,
         Runtime<_>,
-    > = StfBlueprint::new();
+    > = StfBlueprint::new(None);
 
     let stf_verifier = StfVerifier::new(stf, MockDaVerifier {});
 

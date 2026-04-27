@@ -31,7 +31,7 @@ fn cycles_per_block() {
             NomtStorage,
         >,
         Runtime<_>,
-    > = StfBlueprint::new();
+    > = StfBlueprint::new(None);
 
     let stf_verifier = StfVerifier::new(stf, MockDaVerifier {});
 

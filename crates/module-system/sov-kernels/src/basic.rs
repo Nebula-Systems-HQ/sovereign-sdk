@@ -73,6 +73,7 @@ impl<S: Spec> BlobSelector for BasicKernel<'_, S> {
         current_blobs: RelevantBlobIters<&mut [<S::Da as DaSpec>::BlobTransaction]>,
         state: &mut KernelStateAccessor<'_, S>,
         cf: CF,
+        _encryption_layer: Option<&sov_encryption::EncryptionLayer>,
     ) -> anyhow::Result<(
         BlobSelectorOutput<SelectedBlob<S, IterableBatchWithId<S, CF>>>,
         Vec<DiscardedBlob>,
