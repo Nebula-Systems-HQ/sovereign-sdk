@@ -289,6 +289,23 @@ pub struct PreferredBatchData {
     pub visible_slots_to_advance: NonZero<u8>,
 }
 
+/// Current wire-format version for encrypted preferred batch data.
+pub const ENCRYPTED_PREFERRED_BATCH_DATA_VERSION: u8 = 1;
+
+/// Encrypted batch data where the entire Vec<FullyBakedTx> is encrypted as one blob.
+/// Used when encryption is enabled for better efficiency than per-transaction encryption.
+#[derive(Debug, PartialEq, Eq, Clone, BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
+pub struct EncryptedPreferredBatchData {
+    /// Encryption envelope version.
+    pub encryption_format_version: u8,
+    /// The sequence number of the batch.
+    pub sequence_number: u64,
+    /// The encrypted serialized Vec<FullyBakedTx> data. The bytes are nonce || AES-GCM ciphertext.
+    pub encrypted_txs_data: Vec<u8>,
+    /// The number of visible slots to advance after processing the batch. Minimum 1.
+    pub visible_slots_to_advance: NonZero<u8>,
+}
+
 /// A trait implemented by blobs sent through the preferred sequencer.
 ///
 /// This allows the rollup to process them in order, even if they are
@@ -300,6 +317,12 @@ pub trait PreferredSequenced: Into<PreferredBlobData> {
 }
 
 impl PreferredSequenced for PreferredBatchData {
+    fn sequence_number(&self) -> SequenceNumber {
+        self.sequence_number
+    }
+}
+
+impl PreferredSequenced for EncryptedPreferredBatchData {
     fn sequence_number(&self) -> SequenceNumber {
         self.sequence_number
     }
@@ -348,6 +371,8 @@ pub struct PreferredBlobDataWithId {
 pub enum PreferredBlobData {
     /// A preferred blob from the batch namespace.
     Batch(PreferredBatchData),
+    /// An encrypted preferred blob from the batch namespace.
+    EncryptedBatch(EncryptedPreferredBatchData),
     /// A preferred blob from the proof namespace.
     Proof(PreferredProofData),
 }
@@ -357,19 +382,24 @@ impl PreferredBlobData {
     pub fn sequence_number(&self) -> u64 {
         match self {
             PreferredBlobData::Batch(b) => b.sequence_number,
+            PreferredBlobData::EncryptedBatch(b) => b.sequence_number,
             PreferredBlobData::Proof(p) => p.sequence_number,
         }
     }
 
     /// Returns true if the blob is a batch.
     pub fn is_batch(&self) -> bool {
-        matches!(self, PreferredBlobData::Batch(_))
+        matches!(
+            self,
+            PreferredBlobData::Batch(_) | PreferredBlobData::EncryptedBatch(_)
+        )
     }
 
     /// Returns the number of visible slots to advance after processing the blob if it's a batch.
     pub fn visible_slot_number_increase(&self) -> Option<u8> {
         match self {
             PreferredBlobData::Batch(b) => Some(b.visible_slots_to_advance.get()),
+            PreferredBlobData::EncryptedBatch(b) => Some(b.visible_slots_to_advance.get()),
             PreferredBlobData::Proof(_) => None,
         }
     }
