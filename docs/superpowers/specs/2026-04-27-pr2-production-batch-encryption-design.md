@@ -290,3 +290,7 @@ SKIP_GUEST_BUILD=1 SP1_SKIP_PROGRAM_BUILD=1 RISC0_SKIP_BUILD_KERNELS=1 make chec
 - Scope check: the design covers one production feature, native static-key batch encryption, and excludes ZK/KMS implementation.
 - Ambiguity check: key rotation, Unix sockets, and ZK proving are explicitly out of scope.
 - Type consistency: the design consistently uses one static key provider behind an encryption-layer boundary.
+
+## Implementation Note
+
+The implemented production path uses the root `[batch_encryption]` rollup config section with a static AES-256-GCM key. ZK/prover support and live key management remain explicitly out of scope for this phase.
