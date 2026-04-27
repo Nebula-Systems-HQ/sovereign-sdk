@@ -131,6 +131,15 @@ max_batch_size_bytes = 1048576
 max_concurrent_blobs = 128
 max_allowed_node_distance_behind = 10
 rollup_address = "sov1lzkjgdaz08su3yevqu6ceywufl35se9f33kztu5cu2spja5hyyf"
+
+# Optional preferred batch encryption.
+# In production this value should be supplied through SOPS or another secret
+# management path before the node starts. Encrypted batch proving in SP1/Risc0
+# guests is not supported in this phase.
+# [batch_encryption]
+# type = "static"
+# encryption_key = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+
 [sequencer.preferred]
 # TODO: Remove it when https://github.com/Sovereign-Labs/sovereign-sdk-wip/issues/2814 is resolved
 disable_state_root_consistency_checks = true
