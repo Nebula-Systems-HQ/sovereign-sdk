@@ -119,6 +119,7 @@ async fn start_rollup(
             if let SequencerKindConfig::Preferred(seq_config) = &mut c.sequencer_config {
                 seq_config.batch_execution_time_limit_millis =
                     TEST_DEFAULT_MOCK_DA_BLOCK_TIME_MS * 3;
+                seq_config.ideal_lag_behind_finalized_slot = 3;
             }
         })
         .start(),
@@ -272,7 +273,15 @@ async fn test_rollup_resync() -> anyhow::Result<()> {
 
     // Next, delete everything except the preferred sequencer DB. Resync again to verify that this
     // doesn't interfere
-    for path in ["state", "accessory", "ledger", "blob_sender"] {
+    for path in [
+        "user_nomt_db",
+        "kernel_nomt_db",
+        "state-db",
+        "archival-state-db",
+        "accessory",
+        "ledger",
+        "blob_sender",
+    ] {
         std::fs::remove_dir_all(rollup_storage_path.path().join(path))?;
     }
     // sanity check
@@ -332,7 +341,7 @@ async fn test_rollup_resync() -> anyhow::Result<()> {
         // oddity that might be worth investigating.
         (Level::WARN, "State Transition Info is not consumed fast enough, cannot prune older entries. Please check that consumer works.".to_string()),
         (Level::WARN, "The node is unsynced and doesn't know it. This probably means that you wiped the node DB and are resyncing.".to_string()),
-        (Level::WARN, "Metics have been initialized outside of the rollup blueprint, some measurements can be lost on shutdown".to_string()),
+        (Level::WARN, "Metrics have been initialized outside of the rollup blueprint, some measurements can be lost on shutdown".to_string()),
         (Level::WARN, "Cache warm up task: Transaction could not be applied on the executor.".to_string()),
     ];
 

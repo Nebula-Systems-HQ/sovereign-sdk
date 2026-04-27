@@ -1,3 +1,12 @@
+mod db_elected;
+mod recovery;
+mod replica_gets_txs_from_master;
+mod replica_partitioned_db;
+mod replica_registers_in_db;
+mod root_hash_checker;
+mod start_stop;
+mod toxi_proxy_helper;
+
 use crate::test_helpers::build_transfer_token_tx;
 use crate::test_helpers::test_genesis_source;
 use futures::stream::BoxStream;
@@ -23,6 +32,7 @@ use sov_proxy_utils::ClusterInfoService;
 use sov_proxy_utils::RootHashCheck;
 use sov_proxy_utils::RootHashConsistency;
 use sov_sequencer::preferred::ConfiguredNodeRole;
+use sov_sequencer::preferred::RecoveryStrategy;
 use sov_sequencer::SequencerRole;
 use sov_test_utils::postgres::CreatePostgresError;
 use sov_test_utils::test_rollup::read_private_key;
@@ -34,12 +44,6 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::time::Duration;
-
-mod db_elected;
-mod replica_gets_txs_from_master;
-mod replica_registers_in_db;
-mod root_hash_checker;
-mod start_stop;
 
 type S = <ExternalMockDemoRollup<Native> as RollupBlueprint<Native>>::Spec;
 const TEST_SEQ_DA_ADDRESS: MockAddress = MockAddress::new([0; 32]);
@@ -77,9 +81,10 @@ async fn create_da_service_periodic() -> (StorableMockDaService, watch::Sender<(
     (da_service, shutdown_sender, addr)
 }
 
-async fn start_rollup(
+async fn start_rollup_with_connection_string(
     addr: SocketAddr,
     postgres: Option<(Arc<PostgresData>, String, ConfiguredNodeRole)>,
+    postgres_connection_override: Option<String>,
 ) -> TestRollup<ExternalMockDemoRollup<Native>> {
     let genesis = test_genesis_source(OperatingMode::Operator);
     RollupBuilder::new_with_external_da(
@@ -90,15 +95,37 @@ async fn start_rollup(
         postgres,
     )
     .await
-    .set_config(|c| match &mut c.sequencer_config {
-        SequencerKindConfig::Standard(_) => {}
-        SequencerKindConfig::Preferred(p) => {
-            p.num_cache_warmup_workers = 0;
+    .set_config(move |c| {
+        c.blob_processing_timeout_secs = 300;
+        match &mut c.sequencer_config {
+            SequencerKindConfig::Standard(_) => {
+                panic!("Expected preferred sequencer config");
+            }
+            SequencerKindConfig::Preferred(p) => {
+                p.num_cache_warmup_workers = 0;
+                p.recovery_strategy = RecoveryStrategy::TryToSave;
+                p.ideal_lag_behind_finalized_slot = 3;
+                if let Some(connection_string) = postgres_connection_override.as_ref() {
+                    p.postgres_config
+                        .as_mut()
+                        .expect(
+                            "Expected postgres config when overriding postgres connection string",
+                        )
+                        .postgres_connection_string = connection_string.clone();
+                }
+            }
         }
     })
     .start_test_rollup()
     .await
     .unwrap()
+}
+
+async fn start_rollup(
+    addr: SocketAddr,
+    postgres: Option<(Arc<PostgresData>, String, ConfiguredNodeRole)>,
+) -> TestRollup<ExternalMockDemoRollup<Native>> {
+    start_rollup_with_connection_string(addr, postgres, None).await
 }
 
 async fn send_transfers(
@@ -163,6 +190,7 @@ type Rollup = ExternalMockDemoRollup<Native>;
 /// Test setup for DbElected tests with two nodes (leader and replica).
 struct NodeDiscoveryTestSetup {
     postgres: Arc<PostgresData>,
+    da_service: StorableMockDaService,
     da_addr: SocketAddr,
     da_shutdown: watch::Sender<()>,
     cluster_info_service: ClusterInfoService,
@@ -188,7 +216,7 @@ impl NodeDiscoveryTestSetup {
             }
         };
 
-        let (_, da_shutdown, da_addr) = create_da_service_periodic().await;
+        let (da_service, da_shutdown, da_addr) = create_da_service_periodic().await;
 
         let cluster_info_service =
             ClusterInfoService::spawn(postgres.connection_string(), max_age, None)
@@ -197,6 +225,7 @@ impl NodeDiscoveryTestSetup {
 
         Some(Self {
             postgres,
+            da_service,
             da_shutdown,
             da_addr,
             cluster_info_service,

@@ -364,6 +364,9 @@ async fn setup_with_block_producing(
         c.rollup_prover_config = None;
         c.max_channel_size = 1;
         c.max_infos_in_db = 1;
+        if let sov_sequencer::SequencerKindConfig::Preferred(ref mut seq) = c.sequencer_config {
+            seq.ideal_lag_behind_finalized_slot = 3;
+        }
     })
     .start()
     .await
@@ -372,7 +375,7 @@ async fn setup_with_block_producing(
     if is_manual {
         rollup.tenderly_produce_blocks(10).await.unwrap();
     } else {
-        rollup.wait_for_next_blocks(10).await;
+        rollup.wait_for_rollup_height_advance_by(10).await;
     }
     rollup.wait_for_sequencer_ready().await.unwrap();
 
