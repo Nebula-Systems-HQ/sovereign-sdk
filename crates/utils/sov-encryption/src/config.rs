@@ -21,3 +21,20 @@ impl std::fmt::Debug for BatchEncryptionConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_redacts_static_key_material() {
+        let encryption_key = (1u8..=32).map(|b| format!("{b:02x}")).collect::<String>();
+        let config = BatchEncryptionConfig::Static {
+            encryption_key: encryption_key.clone(),
+        };
+
+        let debug = format!("{config:?}");
+        assert!(debug.contains("[REDACTED]"));
+        assert!(!debug.contains(&encryption_key));
+    }
+}

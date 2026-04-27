@@ -22,6 +22,7 @@ const AES_GCM_TAG_SIZE: usize = 16;
 
 #[derive(Clone, Debug)]
 pub struct EncryptionLayer {
+    #[cfg_attr(not(feature = "aes-encryption"), allow(dead_code))]
     key_provider: Arc<dyn BatchEncryptionKeyProvider>,
 }
 
@@ -44,7 +45,7 @@ impl EncryptionLayer {
     #[cfg(feature = "aes-encryption")]
     #[allow(deprecated)]
     pub fn encrypt(&self, plaintext: &[u8]) -> Result<Vec<u8>, EncryptionError> {
-        let key = self.key_provider.active_key();
+        let key = self.key_provider.active_key()?;
         let key = key.expose_for_crypto();
         if key.len() != AES_256_KEY_SIZE {
             return Err(EncryptionError::InvalidKeyFormat(format!(
@@ -81,7 +82,7 @@ impl EncryptionLayer {
             )));
         }
 
-        let key = self.key_provider.active_key();
+        let key = self.key_provider.active_key()?;
         let key = key.expose_for_crypto();
         if key.len() != AES_256_KEY_SIZE {
             return Err(EncryptionError::InvalidKeyFormat(format!(
