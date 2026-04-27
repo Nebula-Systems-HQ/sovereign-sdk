@@ -35,6 +35,7 @@ tokio-stream = { workspace = true }
 sha2 = { workspace = true }
 sov-address = { workspace = true }
 sov-cli = { workspace = true }
+sov-encryption = { workspace = true }
 sov-rollup-interface = { workspace = true }
 sov-rollup-apis = { workspace = true }
 sov-universal-wallet = { workspace = true }

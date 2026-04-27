@@ -5,6 +5,7 @@ use proptest::bits::u64;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sov_chain_state::ChainState;
+use sov_encryption::BatchEncryptionConfig;
 use sov_mock_da::storable::StorableMockDaService;
 use sov_mock_da::{BlockProducingConfig, MockAddress, MockDaService};
 use sov_mock_zkvm::crypto::private_key::Ed25519PrivateKey;
@@ -305,6 +306,40 @@ pub async fn new_test_rollup<RT: Runtime<TestSpec> + HasRestApi<TestSpec>>(
     stop_at_rollup_height: Option<RollupHeight>,
     finalization_blocks: u32,
 ) -> TestRollup<RtAgnosticBlueprint<TestSpec, RT>> {
+    new_test_rollup_with_batch_encryption(
+        dir,
+        seq_da_address,
+        genesis_params,
+        minimum_profit_per_tx,
+        automatic_batch_production,
+        max_batch_size_bytes,
+        block_producing_config,
+        rollup_prover_config,
+        blob_processing_timeout_secs,
+        max_batch_execution_time_millis,
+        stop_at_rollup_height,
+        finalization_blocks,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn new_test_rollup_with_batch_encryption<RT: Runtime<TestSpec> + HasRestApi<TestSpec>>(
+    dir: Arc<tempfile::TempDir>,
+    seq_da_address: MockAddress,
+    genesis_params: GenesisParams<<RT as Runtime<TestSpec>>::GenesisConfig>,
+    minimum_profit_per_tx: u128,
+    automatic_batch_production: bool,
+    max_batch_size_bytes: usize,
+    block_producing_config: BlockProducingConfig,
+    rollup_prover_config: Option<RollupProverConfig<MockZkvm>>,
+    blob_processing_timeout_secs: u64,
+    max_batch_execution_time_millis: u64,
+    stop_at_rollup_height: Option<RollupHeight>,
+    finalization_blocks: u32,
+    batch_encryption: Option<BatchEncryptionConfig>,
+) -> TestRollup<RtAgnosticBlueprint<TestSpec, RT>> {
     let builder = RollupBuilder::<RtAgnosticBlueprint<TestSpec, RT>>::new(
         GenesisSource::CustomParams(genesis_params),
         block_producing_config,
@@ -328,6 +363,11 @@ pub async fn new_test_rollup<RT: Runtime<TestSpec> + HasRestApi<TestSpec>>(
     .set_persistent_da()
     .with_preferred_seq_min_profit_per_tx(minimum_profit_per_tx)
     .with_preferred_seq_recovery_strategy(sov_sequencer::preferred::RecoveryStrategy::TryToSave);
+
+    let builder = match batch_encryption {
+        Some(config) => builder.with_batch_encryption_config(config),
+        None => builder,
+    };
 
     builder.start().await.unwrap()
 }

@@ -12495,6 +12495,7 @@ dependencies = [
  "sov-chain-state",
  "sov-cli",
  "sov-db",
+ "sov-encryption",
  "sov-kernels",
  "sov-ledger-apis",
  "sov-mock-da",
