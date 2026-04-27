@@ -53,6 +53,7 @@ where
         api_ledger_db: LedgerDb,
         shutdown_sender: watch::Sender<()>,
         stop_at_rollup_height: Option<RollupHeight>,
+        shared_encryption_layer: Option<EncryptionLayer>,
         bind_addr: SocketAddr,
     ) -> Result<(PreferredSequencer<S, Rt, Da>, Vec<JoinHandle<()>>)> {
         let shutdown_receiver = shutdown_sender.subscribe();
@@ -100,6 +101,7 @@ where
             Duration::from_secs(config.blob_processing_timeout_secs),
             blobs_sender_channel.clone(),
             seq_role,
+            shared_encryption_layer,
         )
         .await?;
 

@@ -13,6 +13,8 @@ pub struct StfBlueprint<S: Spec, RT: Runtime<S>> {
     /// The runtime includes all the modules that the rollup supports.
     #[cfg_attr(not(feature = "test-utils"), allow(dead_code))]
     pub(crate) runtime: RT,
+    /// Optional encryption layer for decrypting DA blobs.
+    pub(crate) encryption_layer: Option<sov_encryption::EncryptionLayer>,
     phantom_context: PhantomData<S>,
 }
 
@@ -22,10 +24,7 @@ where
     RT: Runtime<S>,
 {
     fn default() -> Self {
-        Self {
-            runtime: RT::default(),
-            phantom_context: PhantomData,
-        }
+        Self::new(None)
     }
 }
 
@@ -34,17 +33,24 @@ where
     S: Spec,
     RT: Runtime<S>,
 {
-    /// [`StfBlueprint`] constructor with the default [`Runtime`] value. Same as
-    /// [`Default::default`].
-    pub fn new() -> Self {
-        Self::default()
+    /// [`StfBlueprint`] constructor with the default [`Runtime`] value and optional encryption layer.
+    pub fn new(encryption_layer: Option<sov_encryption::EncryptionLayer>) -> Self {
+        Self {
+            runtime: RT::default(),
+            encryption_layer,
+            phantom_context: PhantomData,
+        }
     }
 
-    /// [`StfBlueprint`] constructor with a custom [`Runtime`] value.
-    pub fn with_runtime(runtime: RT) -> Self {
+    /// [`StfBlueprint`] constructor with a custom [`Runtime`] value and optional encryption layer.
+    pub fn with_runtime(
+        runtime: RT,
+        encryption_layer: Option<sov_encryption::EncryptionLayer>,
+    ) -> Self {
         Self {
             runtime,
-            ..Default::default()
+            encryption_layer,
+            phantom_context: PhantomData,
         }
     }
 
