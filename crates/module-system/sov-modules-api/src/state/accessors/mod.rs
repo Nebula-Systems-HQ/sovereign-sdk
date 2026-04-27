@@ -115,6 +115,7 @@ impl<S: Spec> StateProvider<S> for ApiStateAccessor<S> {
         TxScratchpad {
             inner: RevertableWriter::new(self),
             phantom: PhantomData,
+            events: Vec::new(),
         }
     }
 }
