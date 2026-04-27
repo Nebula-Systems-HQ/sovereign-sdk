@@ -304,8 +304,6 @@ pub struct EncryptedPreferredBatchData {
     pub encrypted_txs_data: Vec<u8>,
     /// The number of visible slots to advance after processing the batch. Minimum 1.
     pub visible_slots_to_advance: NonZero<u8>,
-    /// Transaction hashes corresponding to the encrypted transactions.
-    pub tx_hashes: Arc<Vec<sov_modules_api::TxHash>>,
 }
 
 /// A trait implemented by blobs sent through the preferred sequencer.

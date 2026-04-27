@@ -51,6 +51,25 @@ pub use wallet::*;
 pub const GIT_COMMIT_HASH: &str = env!("GIT_COMMIT_HASH");
 use crate::RollupBlueprint;
 
+fn validate_batch_encryption_prover_config(
+    batch_encryption_enabled: bool,
+    prover_config: Option<RollupProverConfigDiscriminants>,
+) -> anyhow::Result<()> {
+    if !batch_encryption_enabled {
+        return Ok(());
+    }
+
+    match prover_config {
+        Some(
+            config @ (RollupProverConfigDiscriminants::Execute
+            | RollupProverConfigDiscriminants::Prove),
+        ) => anyhow::bail!(
+            "batch encryption is not supported with prover config `{config}`; use `skip`, unset `SOV_PROVER_MODE`, or disable `[batch_encryption]` until encrypted proving is implemented"
+        ),
+        _ => Ok(()),
+    }
+}
+
 /// This trait defines how to create all the necessary dependencies required by a rollup.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 #[async_trait]
@@ -354,6 +373,12 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
             let prover_config: RollupProverConfigDiscriminants = prover_config.into();
             panic!("The operating mode is set to `{operating_mode:?}` and prover config is set to `{prover_config:?}`. This is not supported");
         }
+        validate_batch_encryption_prover_config(
+            rollup_config.batch_encryption.is_some(),
+            prover_config
+                .clone()
+                .map(RollupProverConfigDiscriminants::from),
+        )?;
 
         let da_service = self
             .create_da_service(&rollup_config, secondary_shutdown_receiver.clone())
@@ -817,4 +842,50 @@ pub struct SequencerCreationReceipt<S: Spec> {
     pub background_handles: Vec<JoinHandle<()>>,
     #[allow(missing_docs)]
     pub da_address: <S::Da as DaSpec>::Address,
+}
+
+#[cfg(test)]
+mod tests {
+    use sov_stf_runner::processes::RollupProverConfigDiscriminants;
+
+    use super::validate_batch_encryption_prover_config;
+
+    #[test]
+    fn batch_encryption_allows_no_prover_config() {
+        validate_batch_encryption_prover_config(true, None).unwrap();
+    }
+
+    #[test]
+    fn batch_encryption_allows_skip_prover_config() {
+        validate_batch_encryption_prover_config(true, Some(RollupProverConfigDiscriminants::Skip))
+            .unwrap();
+    }
+
+    #[test]
+    fn batch_encryption_rejects_execute_prover_config() {
+        let err = validate_batch_encryption_prover_config(
+            true,
+            Some(RollupProverConfigDiscriminants::Execute),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("batch encryption"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn batch_encryption_rejects_prove_prover_config() {
+        let err = validate_batch_encryption_prover_config(
+            true,
+            Some(RollupProverConfigDiscriminants::Prove),
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string().contains("batch encryption"),
+            "unexpected error: {err}"
+        );
+    }
 }

@@ -1426,7 +1426,6 @@ mod tests {
             sequence_number: 11,
             encrypted_txs_data,
             visible_slots_to_advance: std::num::NonZero::new(1).unwrap(),
-            tx_hashes: std::sync::Arc::new(vec![]),
         };
 
         let wrapper = PreferredBlobData::EncryptedBatch(encrypted.clone());
@@ -1495,7 +1494,6 @@ mod tests {
             sequence_number: 0,
             encrypted_txs_data,
             visible_slots_to_advance: std::num::NonZero::new(1).unwrap(),
-            tx_hashes: std::sync::Arc::new(vec![]),
         }
     }
 

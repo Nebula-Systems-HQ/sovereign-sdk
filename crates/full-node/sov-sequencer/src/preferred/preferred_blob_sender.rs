@@ -212,7 +212,6 @@ fn batch_bytes(
                 sequence_number: batch.sequence_number,
                 visible_slots_to_advance: batch.visible_slots_to_advance,
                 encrypted_txs_data,
-                tx_hashes: batch.tx_hashes,
             })?
             .into(),
         )
@@ -275,6 +274,7 @@ mod tests {
         let layer = encryption_layer();
         let batch = read_batch();
         let plaintext_txs = borsh::to_vec(&*batch.txs).unwrap();
+        let tx_hashes = batch.tx_hashes.clone();
         let bytes = batch_bytes(batch, Some(&layer)).unwrap();
 
         assert!(
@@ -283,6 +283,14 @@ mod tests {
                 .any(|window| window == plaintext_txs.as_slice()),
             "encrypted blob must not contain serialized plaintext transactions"
         );
+        for tx_hash in tx_hashes.iter() {
+            assert!(
+                !bytes
+                    .windows(tx_hash.0.len())
+                    .any(|window| window == tx_hash.0.as_slice()),
+                "encrypted blob must not contain visible transaction hashes"
+            );
+        }
 
         let encrypted = EncryptedPreferredBatchData::try_from_slice(&bytes).unwrap();
         assert_eq!(encrypted.sequence_number, 7);

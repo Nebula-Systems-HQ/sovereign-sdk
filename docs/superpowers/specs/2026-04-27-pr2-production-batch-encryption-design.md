@@ -106,8 +106,9 @@ The encrypted wrapper should include:
 - Batch sequence number.
 - Visible slots to advance.
 - Encrypted serialized transaction vector.
-- Transaction hashes, if still needed by the sequencer status path.
 - Encryption format version.
+
+It should not include transaction hashes. The sequencer status path keeps transaction hashes in local blob-sender bookkeeping keyed by blob ID, so publishing hashes in the DA envelope would leak transaction fingerprints without a current consumer.
 
 Key ID is optional for the static-key phase. If retained, it should be a constant or clearly documented as metadata only. The decrypt path must not depend on key lookup by ID in this phase.
 
@@ -293,4 +294,4 @@ SKIP_GUEST_BUILD=1 SP1_SKIP_PROGRAM_BUILD=1 RISC0_SKIP_BUILD_KERNELS=1 make chec
 
 ## Implementation Note
 
-The implemented production path uses the root `[batch_encryption]` rollup config section with a static AES-256-GCM key. ZK/prover support and live key management remain explicitly out of scope for this phase.
+The implemented production path uses the root `[batch_encryption]` rollup config section with a static AES-256-GCM key. The encrypted DA wrapper carries sequencing metadata plus ciphertext, but not plaintext transactions or transaction hashes. `execute`/`prove` prover modes fail fast when batch encryption is configured; encrypted proving and live key management remain explicitly out of scope for this phase.
