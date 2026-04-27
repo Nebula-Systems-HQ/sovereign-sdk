@@ -109,6 +109,17 @@ impl<S: Spec> StateProvider<S> for StateCheckpoint<S> {
     }
 }
 
+#[cfg(feature = "native")]
+impl<S: Spec> StateProvider<S> for ApiStateAccessor<S> {
+    fn to_tx_scratchpad(self) -> TxScratchpad<S, ApiStateAccessor<S>> {
+        TxScratchpad {
+            inner: RevertableWriter::new(self),
+            phantom: PhantomData,
+            events: Vec::new(),
+        }
+    }
+}
+
 /// A trait for types that provide state metrics.
 pub trait StateMetricsProvider {
     /// Returns a mutable reference to the state metrics.
