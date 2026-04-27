@@ -447,6 +447,7 @@ pub fn rollup_config_with_da<Da: DaService<Config = MockDaConfig>>(
             blob_processing_timeout_secs: TEST_BLOB_PROCESSING_TIMEOUT,
             extension: None,
         },
+        batch_encryption: None,
         monitoring: MonitoringConfig::standard(),
     }
 }
