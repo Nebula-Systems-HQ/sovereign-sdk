@@ -157,6 +157,9 @@ pub struct RollupConfig<Address: Copy, Da: DaService, M> {
     pub proof_manager: ProofManagerConfig<Address>,
     /// Sequencer (and batch builder) configuration.
     pub sequencer: SequencerConfig<Address, SequencerKindConfig<Address>>,
+    /// Optional preferred batch encryption configuration.
+    #[serde(default)]
+    pub batch_encryption: Option<sov_encryption::BatchEncryptionConfig>,
     /// Monitoring configuration.
     pub monitoring: M,
 }
@@ -231,6 +234,96 @@ mod tests {
             toml::from_str::<RollupConfig<Address, MockDaService, MonitoringConfig>>(config_s)
                 .unwrap();
         insta::assert_json_snapshot!(config);
+    }
+
+    #[test]
+    fn test_correct_config_with_static_batch_encryption() {
+        let config_s = r#"
+            [da]
+            connection_string = "sqlite:///tmp/mockda.sqlite?mode=rwc"
+            sender_address = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+            [da.block_producing.periodic]
+            block_time_ms = 1_000
+            [storage]
+            path = "/tmp"
+            [runner]
+            da_polling_interval_ms = 10000
+            concurrent_sync_tasks = 18
+            [runner.http_config]
+            bind_host = "127.0.0.1"
+            bind_port = 12346
+            public_address = "https://rollup.sovereign.xyz"
+            cors = "restrictive"
+            [monitoring]
+            telegraf_address = "udp://192.168.4.5:8543"
+            max_datagram_size = 1024
+            max_pending_metrics = 2560
+            [proof_manager]
+            aggregated_proof_block_jump = 22
+            prover_address = "sov1lzkjgdaz08su3yevqu6ceywufl35se9f33kztu5cu2spja5hyyf"
+            max_number_of_transitions_in_db = 1025
+            max_number_of_transitions_in_memory = 768
+            [sequencer]
+            blob_processing_timeout_secs = 60
+            max_batch_size_bytes = 1048576
+            max_concurrent_blobs = 16
+            max_allowed_node_distance_behind = 5
+            rollup_address = "sov1lzkjgdaz08su3yevqu6ceywufl35se9f33kztu5cu2spja5hyyf"
+            [sequencer.standard]
+            [batch_encryption]
+            type = "static"
+            encryption_key = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+        "#;
+
+        let config =
+            toml::from_str::<RollupConfig<Address, MockDaService, MonitoringConfig>>(config_s)
+                .unwrap();
+
+        insta::assert_json_snapshot!(config);
+    }
+
+    #[test]
+    fn test_sequencer_batch_encryption_is_rejected() {
+        let config_s = r#"
+            [da]
+            connection_string = "sqlite:///tmp/mockda.sqlite?mode=rwc"
+            sender_address = "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+            [da.block_producing.periodic]
+            block_time_ms = 1_000
+            [storage]
+            path = "/tmp"
+            [runner]
+            da_polling_interval_ms = 10000
+            concurrent_sync_tasks = 18
+            [runner.http_config]
+            bind_host = "127.0.0.1"
+            bind_port = 12346
+            [monitoring]
+            telegraf_address = "udp://192.168.4.5:8543"
+            max_datagram_size = 1024
+            max_pending_metrics = 2560
+            [proof_manager]
+            aggregated_proof_block_jump = 22
+            prover_address = "sov1lzkjgdaz08su3yevqu6ceywufl35se9f33kztu5cu2spja5hyyf"
+            max_number_of_transitions_in_db = 1025
+            max_number_of_transitions_in_memory = 768
+            [sequencer]
+            blob_processing_timeout_secs = 60
+            max_batch_size_bytes = 1048576
+            max_concurrent_blobs = 16
+            max_allowed_node_distance_behind = 5
+            rollup_address = "sov1lzkjgdaz08su3yevqu6ceywufl35se9f33kztu5cu2spja5hyyf"
+            [sequencer.standard]
+            [sequencer.batch_encryption]
+            type = "static"
+            encryption_key = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+        "#;
+
+        let err =
+            toml::from_str::<RollupConfig<Address, MockDaService, MonitoringConfig>>(config_s)
+                .unwrap_err();
+
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]
