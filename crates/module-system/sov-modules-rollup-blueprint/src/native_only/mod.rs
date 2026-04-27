@@ -60,10 +60,7 @@ fn validate_batch_encryption_prover_config(
     }
 
     match prover_config {
-        Some(
-            config @ (RollupProverConfigDiscriminants::Execute
-            | RollupProverConfigDiscriminants::Prove),
-        ) => anyhow::bail!(
+        Some(config @ RollupProverConfigDiscriminants::Prove) => anyhow::bail!(
             "batch encryption is not supported with prover config `{config}`; use `skip`, unset `SOV_PROVER_MODE`, or disable `[batch_encryption]` until encrypted proving is implemented"
         ),
         _ => Ok(()),
@@ -860,20 +857,6 @@ mod tests {
     fn batch_encryption_allows_skip_prover_config() {
         validate_batch_encryption_prover_config(true, Some(RollupProverConfigDiscriminants::Skip))
             .unwrap();
-    }
-
-    #[test]
-    fn batch_encryption_rejects_execute_prover_config() {
-        let err = validate_batch_encryption_prover_config(
-            true,
-            Some(RollupProverConfigDiscriminants::Execute),
-        )
-        .unwrap_err();
-
-        assert!(
-            err.to_string().contains("batch encryption"),
-            "unexpected error: {err}"
-        );
     }
 
     #[test]
