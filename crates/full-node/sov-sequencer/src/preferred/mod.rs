@@ -39,6 +39,7 @@ use side_effects::SideEffectsTask;
 use sov_blob_sender::{new_blob_id, BlobExecutionStatus};
 use sov_blob_storage::{PreferredBatchData, SequenceNumber};
 use sov_db::ledger_db::LedgerDb;
+use sov_encryption::EncryptionLayer;
 pub use sov_full_node_configs::sequencer::{
     ConfiguredNodeRole, PostgresConfig, PreferredSequencerConfig, RecoveryStrategy,
 };
@@ -156,6 +157,7 @@ where
         api_ledger_db: LedgerDb,
         shutdown_sender: watch::Sender<()>,
         stop_at_rollup_height: Option<RollupHeight>,
+        shared_encryption_layer: Option<EncryptionLayer>,
         bind_addr: SocketAddr,
     ) -> anyhow::Result<(Self, Vec<JoinHandle<()>>)> {
         Builder::new(da, config)
@@ -166,6 +168,7 @@ where
                 api_ledger_db,
                 shutdown_sender,
                 stop_at_rollup_height,
+                shared_encryption_layer,
                 bind_addr,
             )
             .await

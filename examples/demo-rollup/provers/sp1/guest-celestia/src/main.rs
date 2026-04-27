@@ -35,7 +35,7 @@ pub fn main() {
             NomtStorage,
         >,
         Runtime<_>,
-    > = StfBlueprint::new();
+    > = StfBlueprint::new(None);
 
     let rollup_params = sov_celestia_adapter::verifier::RollupParams {
         rollup_batch_namespace: ROLLUP_BATCH_NAMESPACE,
