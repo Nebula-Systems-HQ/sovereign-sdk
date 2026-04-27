@@ -1,14 +1,22 @@
 use std::env;
+use std::pin::Pin;
 
-use futures::StreamExt;
-use sov_blob_sender::BlobSelectorStatus;
+use borsh::BorshDeserialize;
+use futures::{Stream, StreamExt};
+use sov_blob_sender::{BlobExecutionStatus, BlobSelectorStatus, BlobSubmissionStatus};
+use sov_blob_storage::{
+    EncryptedPreferredBatchData, PreferredBatchData, ENCRYPTED_PREFERRED_BATCH_DATA_VERSION,
+};
 use sov_encryption::BatchEncryptionConfig;
-use sov_mock_da::BlockProducingConfig;
+use sov_mock_da::{BlockProducingConfig, MockDaSpec};
 use sov_mock_zkvm::crypto::private_key::Ed25519PrivateKey;
+use sov_modules_api::capabilities::TransactionAuthenticator;
 use sov_modules_api::prelude::*;
-use sov_modules_api::{DispatchCall, RawTx, Runtime};
+use sov_modules_api::{DispatchCall, FullyBakedTx, RawTx, Runtime};
 use sov_modules_stf_blueprint::GenesisParams;
 use sov_paymaster::PaymasterConfig;
+use sov_rollup_interface::da::{BlobReaderTrait, BlockHeaderTrait};
+use sov_rollup_interface::node::da::DaService;
 use sov_rollup_interface::stf::BlobDiscardReason;
 use sov_test_utils::runtime::genesis::optimistic::HighLevelOptimisticGenesisConfig;
 use sov_test_utils::test_rollup::TestRollup;
@@ -28,6 +36,9 @@ use crate::utils::{
     new_test_rollup, new_test_rollup_with_batch_encryption, tempdir_inside_codebase_dir,
     MAX_BATCH_EXECUTION_TIME_MILLIS,
 };
+
+type BlobStatusStream =
+    Pin<Box<dyn Stream<Item = anyhow::Result<BlobExecutionStatus<MockDaSpec>>> + Send>>;
 
 async fn create_test_rollup() -> (TestRollup<TestBlueprint>, TestUser<TestSpec>) {
     let genesis_config =
@@ -207,25 +218,152 @@ async fn test_encrypted_preferred_batch_is_published_and_executed() {
     test_rollup.wait_for_sequencer_ready().await.unwrap();
 
     let client = test_rollup.api_client().clone();
+    let mut blob_statuses = test_rollup
+        .subscribe_to_blobs_from_blob_sender()
+        .await
+        .unwrap();
+    let head_before_tx = test_rollup
+        .da_service
+        .get_head_block_header()
+        .await
+        .unwrap()
+        .height();
     let tx = tx_set_many_values(&admin.private_key, 0, vec![9, 9, 9]);
     client.send_raw_tx_to_sequencer(&tx).await.unwrap();
 
-    test_rollup.da_service.produce_block_now().await.unwrap();
-    test_rollup.wait_for_rollup_height_advance_by(1).await;
+    wait_for_blob_sender_publication(&mut blob_statuses).await;
+    let published_batch =
+        wait_for_next_published_batch_blob(&test_rollup, head_before_tx, 20).await;
+    assert_encrypted_preferred_batch_payload(&published_batch, &tx);
 
-    #[derive(Debug, serde::Deserialize)]
-    struct IdxResponse {
-        #[allow(unused)]
-        index: u64,
-        value: Option<u8>,
+    wait_for_many_values_item(&test_rollup, 0, 9).await;
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct IdxResponse {
+    #[allow(unused)]
+    index: u64,
+    value: Option<u8>,
+}
+
+async fn wait_for_next_published_batch_blob(
+    test_rollup: &TestRollup<TestBlueprint>,
+    start_height: u64,
+    max_blocks_to_produce: u64,
+) -> Vec<u8> {
+    let mut next_height_to_scan = start_height + 1;
+
+    for _ in 0..max_blocks_to_produce {
+        test_rollup.da_service.produce_block_now().await.unwrap();
+        let head = test_rollup
+            .da_service
+            .get_head_block_header()
+            .await
+            .unwrap()
+            .height();
+
+        for height in next_height_to_scan..=head {
+            let mut block = test_rollup.da_service.get_block_at(height).await.unwrap();
+            if let Some(blob) = block.batch_blobs.first_mut() {
+                return blob.full_data().to_vec();
+            }
+        }
+
+        next_height_to_scan = head + 1;
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     }
 
-    let many_values_response = test_rollup
-        .client
-        .query_rest_endpoint::<IdxResponse>("/modules/value-setter/state/many-values/items/0")
-        .await
-        .unwrap();
-    assert_eq!(many_values_response.value, Some(9));
+    panic!(
+        "No batch blob was published within {max_blocks_to_produce} blocks after height {start_height}"
+    );
+}
+
+async fn wait_for_blob_sender_publication(blob_statuses: &mut BlobStatusStream) {
+    tokio::time::timeout(tokio::time::Duration::from_secs(15), async {
+        while let Some(blob_status) = blob_statuses.next().await {
+            let blob_status = blob_status.unwrap();
+            if matches!(
+                blob_status.blob_submission_status,
+                BlobSubmissionStatus::Published { .. }
+                    | BlobSubmissionStatus::Processed { .. }
+                    | BlobSubmissionStatus::Finalized { .. }
+            ) {
+                return;
+            }
+        }
+
+        panic!("Blob sender subscription closed before the batch was published");
+    })
+    .await
+    .expect("Timed out waiting for blob sender to publish the batch");
+}
+
+fn assert_encrypted_preferred_batch_payload(blob_data: &[u8], tx: &RawTx) {
+    let encrypted = EncryptedPreferredBatchData::try_from_slice(blob_data)
+        .expect("published preferred batch blob must decode as encrypted batch data");
+    assert!(
+        PreferredBatchData::try_from_slice(blob_data).is_err(),
+        "encrypted preferred batch blob must not decode as plaintext batch data"
+    );
+    assert_eq!(
+        encrypted.encryption_format_version,
+        ENCRYPTED_PREFERRED_BATCH_DATA_VERSION
+    );
+
+    let baked_tx =
+        <<TestRuntime<TestSpec> as Runtime<TestSpec>>::Auth as TransactionAuthenticator<
+            TestSpec,
+        >>::encode_with_standard_auth(tx.clone());
+    let plaintext_txs = borsh::to_vec::<Vec<FullyBakedTx>>(&vec![baked_tx])
+        .expect("serializing plaintext tx vector should not fail");
+    assert_no_subslice(
+        blob_data,
+        &plaintext_txs,
+        "encrypted blob must not contain the serialized plaintext tx vector",
+    );
+    assert_no_subslice(
+        blob_data,
+        &tx.data,
+        "encrypted blob must not contain the raw transaction bytes",
+    );
+}
+
+fn assert_no_subslice(haystack: &[u8], needle: &[u8], message: &str) {
+    assert!(
+        needle.is_empty()
+            || !haystack
+                .windows(needle.len())
+                .any(|window| window == needle),
+        "{message}"
+    );
+}
+
+async fn wait_for_many_values_item(
+    test_rollup: &TestRollup<TestBlueprint>,
+    index: u64,
+    expected_value: u8,
+) {
+    let endpoint = format!("/modules/value-setter/state/many-values/items/{index}");
+
+    tokio::time::timeout(tokio::time::Duration::from_secs(15), async {
+        loop {
+            if let Ok(response) = test_rollup
+                .client
+                .query_rest_endpoint::<IdxResponse>(&endpoint)
+                .await
+            {
+                if response.value == Some(expected_value) {
+                    return;
+                }
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!("Timed out waiting for many-values item {index} to become {expected_value}")
+    });
 }
 
 fn tx_set_many_values(key: &Ed25519PrivateKey, nonce: u64, values_to_set: Vec<u8>) -> RawTx {
