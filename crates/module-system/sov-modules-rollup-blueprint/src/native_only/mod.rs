@@ -399,34 +399,11 @@ pub trait FullNodeBlueprint<M: ExecutionMode>: RollupBlueprint<M> {
             "Recovering the state root"
         );
 
-        // Create shared encryption layer if any component needs it
-        let shared_encryption_layer: Option<sov_encryption::EncryptionLayer> =
-            if rollup_config.stf.encryption.is_some()
-                || rollup_config.sequencer.batch_encryption.is_some()
-            {
-                // Prefer STF encryption config, fall back to sequencer config
-                let encryption_config = rollup_config
-                    .stf
-                    .encryption
-                    .clone()
-                    .or_else(|| rollup_config.sequencer.batch_encryption.clone());
-                if let Some(config) = encryption_config {
-                    tracing::info!(
-                        "🔐 Creating shared encryption layer for STF and sequencer synchronization"
-                    );
-                    Some(
-                        sov_encryption::EncryptionLayer::new(
-                            config,
-                            Some(main_shutdown_receiver.clone()),
-                        )
-                        .await?,
-                    )
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
+        let shared_encryption_layer = rollup_config
+            .batch_encryption
+            .clone()
+            .map(sov_encryption::EncryptionLayer::from_config)
+            .transpose()?;
 
         // Create STF with shared encryption layer
         let native_stf = StfBlueprint::new(shared_encryption_layer.clone());

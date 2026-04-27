@@ -1,8 +1,6 @@
 use std::num::NonZero;
 use std::sync::Arc;
 
-use sov_full_node_configs::runner::StfConfig;
-
 use crate::helpers::hash_stf::HashStf;
 use axum::async_trait;
 use futures::stream::BoxStream;
@@ -419,7 +417,6 @@ pub fn rollup_config_with_da<Da: DaService<Config = MockDaConfig>>(
             max_number_of_transitions_in_db: NonZero::new(30).unwrap(),
             max_number_of_transitions_in_memory: NonZero::new(20).unwrap(),
         },
-        stf: StfConfig::default(),
         sequencer: SequencerConfig {
             automatic_batch_production: true,
             max_allowed_node_distance_behind: 10,
@@ -435,8 +432,8 @@ pub fn rollup_config_with_da<Da: DaService<Config = MockDaConfig>>(
             max_concurrent_blobs: TEST_MAX_CONCURRENT_BLOBS,
             blob_processing_timeout_secs: TEST_BLOB_PROCESSING_TIMEOUT,
             extension: None,
-            batch_encryption: None,
         },
+        batch_encryption: None,
         monitoring: MonitoringConfig::standard(),
     }
 }

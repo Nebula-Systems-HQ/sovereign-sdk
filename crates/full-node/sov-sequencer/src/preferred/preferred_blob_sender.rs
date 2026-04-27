@@ -1,6 +1,9 @@
 use sov_blob_sender::BlobExecutionStatus;
 use sov_blob_sender::{BlobInternalId, BlobSender, BlobToSend};
-use sov_blob_storage::{EncryptedPreferredBatchData, PreferredBatchData, PreferredProofData};
+use sov_blob_storage::{
+    EncryptedPreferredBatchData, PreferredBatchData, PreferredProofData,
+    ENCRYPTED_PREFERRED_BATCH_DATA_VERSION,
+};
 use sov_db::ledger_db::LedgerDb;
 use sov_encryption::EncryptionLayer;
 use sov_modules_api::TxHash;
@@ -200,48 +203,90 @@ fn batch_bytes(
     encryption_layer: Option<&EncryptionLayer>,
 ) -> anyhow::Result<Arc<[u8]>> {
     if let Some(encryptor) = encryption_layer {
-        // Use the visible slot number from the batch for encryption context
-        let slot_number = batch.visible_slot_number_after_increase.as_true().get();
-        tracing::debug!(
-            "📦 SEQUENCER: Encrypting batch #{} with {} transactions at slot {}",
-            batch.sequence_number,
-            batch.txs.len(),
-            slot_number
-        );
-
-        // Serialize the entire transaction vector
         let txs_serialized = borsh::to_vec(&*batch.txs)?;
-
-        // Encrypt using the encryption layer's built-in fallback logic
-        let (encrypted_txs_data, encryption_key_id) =
-            encryptor.encrypt_for_slot(slot_number, &txs_serialized)?;
-
-        // Create batch with serialized encrypted blob + metadata including key ID
-        tracing::debug!(
-            "📦 SEQUENCER: Creating encrypted batch #{} with encryption_key_id='{}'",
-            batch.sequence_number,
-            encryption_key_id
-        );
+        let encrypted_txs_data = encryptor.encrypt(&txs_serialized)?;
 
         Ok(
             borsh::to_vec::<EncryptedPreferredBatchData>(&EncryptedPreferredBatchData {
+                encryption_format_version: ENCRYPTED_PREFERRED_BATCH_DATA_VERSION,
                 sequence_number: batch.sequence_number,
                 visible_slots_to_advance: batch.visible_slots_to_advance,
                 encrypted_txs_data,
                 tx_hashes: batch.tx_hashes,
-                encryption_key_id,
             })?
             .into(),
         )
     } else {
-        // Original unencrypted path if encryption is not enabled
-        tracing::debug!("📦 Creating batch with unencrypted txs");
-
         Ok(borsh::to_vec::<PreferredBatchData>(&PreferredBatchData {
             sequence_number: batch.sequence_number,
             visible_slots_to_advance: batch.visible_slots_to_advance,
             data: batch.txs,
         })?
         .into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{num::NonZero, sync::Arc};
+
+    use borsh::BorshDeserialize;
+    use sov_blob_sender::new_blob_id;
+    use sov_blob_storage::{EncryptedPreferredBatchData, PreferredBatchData};
+    use sov_encryption::{BatchEncryptionConfig, EncryptionLayer};
+    use sov_modules_api::{FullyBakedTx, TxHash, VisibleSlotNumber};
+
+    use super::{batch_bytes, ReadBatch};
+
+    fn encryption_layer() -> EncryptionLayer {
+        EncryptionLayer::from_config(BatchEncryptionConfig::Static {
+            encryption_key: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+                .to_string(),
+        })
+        .unwrap()
+    }
+
+    fn read_batch() -> ReadBatch {
+        ReadBatch {
+            sequence_number: 7,
+            visible_slot_number_after_increase: VisibleSlotNumber::new_dangerous(10),
+            visible_slots_to_advance: NonZero::new(1).unwrap(),
+            blob_id: new_blob_id(),
+            txs: Arc::new(vec![
+                FullyBakedTx::new(vec![1, 2, 3]),
+                FullyBakedTx::new(vec![4, 5]),
+            ]),
+            tx_hashes: Arc::new(vec![TxHash::new([1; 32]), TxHash::new([2; 32])]),
+        }
+    }
+
+    #[test]
+    fn unencrypted_batch_bytes_decode_as_preferred_batch() {
+        let bytes = batch_bytes(read_batch(), None).unwrap();
+        let batch = PreferredBatchData::try_from_slice(&bytes).unwrap();
+        assert_eq!(batch.sequence_number, 7);
+        assert_eq!(batch.data.len(), 2);
+    }
+
+    #[test]
+    fn encrypted_batch_bytes_hide_plaintext_and_round_trip() {
+        let layer = encryption_layer();
+        let batch = read_batch();
+        let plaintext_txs = borsh::to_vec(&*batch.txs).unwrap();
+        let bytes = batch_bytes(batch, Some(&layer)).unwrap();
+
+        assert!(
+            !bytes
+                .windows(plaintext_txs.len())
+                .any(|window| window == plaintext_txs.as_slice()),
+            "encrypted blob must not contain serialized plaintext transactions"
+        );
+
+        let encrypted = EncryptedPreferredBatchData::try_from_slice(&bytes).unwrap();
+        assert_eq!(encrypted.sequence_number, 7);
+        assert_eq!(encrypted.encryption_format_version, 1);
+        let decrypted = layer.decrypt(&encrypted.encrypted_txs_data).unwrap();
+        let txs = Vec::<FullyBakedTx>::try_from_slice(&decrypted).unwrap();
+        assert_eq!(txs.len(), 2);
     }
 }

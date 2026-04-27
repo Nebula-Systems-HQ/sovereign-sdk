@@ -23,7 +23,7 @@ use crate::{
     config_deferred_slots_count, config_unregistered_blobs_per_slot, BlobStorage, BlobType,
     EncryptedPreferredBatchData, Escrow, PreferredBatchData, PreferredBlobData,
     PreferredBlobDataWithId, PreferredProofData, SequenceNumber, SequencerNumberTracker,
-    SequencerType, ValidatedBlob,
+    SequencerType, ValidatedBlob, ENCRYPTED_PREFERRED_BATCH_DATA_VERSION,
 };
 /// A loose upper bound on the size of an emergency registration blob, in bytes. Blobs larger than this are statically known to be invalid
 /// so we don't bother trying to deserialize them.
@@ -1148,39 +1148,45 @@ impl<S: Spec> BlobStorage<S> {
             state,
         )?;
 
-        tracing::debug!(
-            "STF: Decrypting batch #{} with key '{}'",
-            encrypted_batch.sequence_number,
-            encrypted_batch.encryption_key_id
-        );
+        if encrypted_batch.encryption_format_version != ENCRYPTED_PREFERRED_BATCH_DATA_VERSION {
+            tracing::error!(
+                version = encrypted_batch.encryption_format_version,
+                expected = ENCRYPTED_PREFERRED_BATCH_DATA_VERSION,
+                "STF: Unsupported encrypted preferred batch format version"
+            );
+            self.sequencer_registry
+                .slash_sequencer(&blob.sender(), state);
+            return None;
+        }
 
-        // Decrypt the transaction data using the specific key ID
-        // Old keys are automatically pruned after decryption
-        let decrypted_txs_bytes = match encryption_layer.decrypt_with_key_id(
-            &encrypted_batch.encryption_key_id,
-            &encrypted_batch.encrypted_txs_data,
-        ) {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::error!(
-                    "STF: Failed to decrypt batch #{} with key '{}': {}. \
-                    Skipping batch — encryption key may not be available or data is corrupted.",
-                    encrypted_batch.sequence_number,
-                    encrypted_batch.encryption_key_id,
-                    e
-                );
+        let decrypted_txs_bytes =
+            match encryption_layer.decrypt(&encrypted_batch.encrypted_txs_data) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    tracing::error!(
+                        error = ?e,
+                        sequence_number = encrypted_batch.sequence_number,
+                        "STF: Failed to decrypt preferred batch"
+                    );
+                    self.sequencer_registry
+                        .slash_sequencer(&blob.sender(), state);
+                    return None;
+                }
+            };
+
+        let txs = match self.deserialize_transaction_data(&decrypted_txs_bytes, &encrypted_batch) {
+            Some(txs) => txs,
+            None => {
+                self.sequencer_registry
+                    .slash_sequencer(&blob.sender(), state);
                 return None;
             }
         };
 
-        // Deserialize the decrypted transactions
-        let txs = self.deserialize_transaction_data(&decrypted_txs_bytes, &encrypted_batch)?;
-
         tracing::debug!(
-            "STF: Decrypted batch #{} with {} transactions using key '{}'",
+            "STF: Decrypted batch #{} with {} transactions",
             encrypted_batch.sequence_number,
             txs.len(),
-            encrypted_batch.encryption_key_id
         );
 
         Some(PreferredBatchData {
@@ -1202,10 +1208,10 @@ impl<S: Spec> BlobStorage<S> {
             Ok(txs) => Some(txs),
             Err(e) => {
                 tracing::error!(
-                    "❌ STF: Failed to deserialize decrypted transactions for batch #{} key '{}': {}",
-                    encrypted_batch.sequence_number,
-                    encrypted_batch.encryption_key_id,
-                    e
+                    sequence_number = encrypted_batch.sequence_number,
+                    version = encrypted_batch.encryption_format_version,
+                    error = ?e,
+                    "STF: Failed to deserialize decrypted preferred batch transactions"
                 );
                 None
             }
@@ -1392,6 +1398,37 @@ mod tests {
         BlobStorage, BlobType, PreferredBatchData, PreferredBlobData, PreferredBlobDataWithId,
         PreferredProofData, SequencerNumberTracker,
     };
+
+    #[test]
+    fn encrypted_batch_round_trips_to_preferred_batch_data() {
+        use borsh::BorshDeserialize;
+        use sov_encryption::{BatchEncryptionConfig, EncryptionLayer};
+
+        use crate::{EncryptedPreferredBatchData, ENCRYPTED_PREFERRED_BATCH_DATA_VERSION};
+
+        let layer = EncryptionLayer::from_config(BatchEncryptionConfig::Static {
+            encryption_key: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+                .to_string(),
+        })
+        .unwrap();
+
+        let txs = std::sync::Arc::new(vec![sov_modules_api::FullyBakedTx::new(vec![1, 2, 3])]);
+        let encrypted_txs_data = layer.encrypt(&borsh::to_vec(&*txs).unwrap()).unwrap();
+        let encrypted = EncryptedPreferredBatchData {
+            encryption_format_version: ENCRYPTED_PREFERRED_BATCH_DATA_VERSION,
+            sequence_number: 11,
+            encrypted_txs_data,
+            visible_slots_to_advance: std::num::NonZero::new(1).unwrap(),
+            tx_hashes: std::sync::Arc::new(vec![]),
+        };
+
+        let decrypted_bytes = layer.decrypt(&encrypted.encrypted_txs_data).unwrap();
+        let decoded =
+            std::sync::Arc::<Vec<sov_modules_api::FullyBakedTx>>::try_from_slice(&decrypted_bytes)
+                .unwrap();
+
+        assert_eq!(decoded.len(), 1);
+    }
 
     #[test]
     fn test_find_next_run() {

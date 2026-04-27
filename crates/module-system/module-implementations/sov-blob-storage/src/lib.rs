@@ -289,22 +289,23 @@ pub struct PreferredBatchData {
     pub visible_slots_to_advance: NonZero<u8>,
 }
 
+/// Current wire-format version for encrypted preferred batch data.
+pub const ENCRYPTED_PREFERRED_BATCH_DATA_VERSION: u8 = 1;
+
 /// Encrypted batch data where the entire Vec<FullyBakedTx> is encrypted as one blob.
 /// Used when encryption is enabled for better efficiency than per-transaction encryption.
 #[derive(Debug, PartialEq, Eq, Clone, BorshDeserialize, BorshSerialize, Serialize, Deserialize)]
 pub struct EncryptedPreferredBatchData {
+    /// Encryption envelope version.
+    pub encryption_format_version: u8,
     /// The sequence number of the batch.
     pub sequence_number: u64,
-    /// The encrypted serialized Vec<FullyBakedTx> data.
+    /// The encrypted serialized Vec<FullyBakedTx> data. The bytes are nonce || AES-GCM ciphertext.
     pub encrypted_txs_data: Vec<u8>,
     /// The number of visible slots to advance after processing the batch. Minimum 1.
     pub visible_slots_to_advance: NonZero<u8>,
-    /// Transaction hashes corresponding to the transactions in encrypted_txs_data.
-    /// Included to allow STF runners to access tx hashes without decrypting.
+    /// Transaction hashes corresponding to the encrypted transactions.
     pub tx_hashes: Arc<Vec<sov_modules_api::TxHash>>,
-    /// The ID of the encryption key used. This ensures STF uses the exact same key
-    /// that was used for encryption, regardless of timing differences.
-    pub encryption_key_id: String,
 }
 
 /// A trait implemented by blobs sent through the preferred sequencer.
