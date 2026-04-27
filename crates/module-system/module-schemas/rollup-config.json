@@ -12,6 +12,18 @@
     "storage"
   ],
   "properties": {
+    "batch_encryption": {
+      "description": "Optional preferred batch encryption configuration.",
+      "default": null,
+      "anyOf": [
+        {
+          "$ref": "#/definitions/BatchEncryptionConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "da": {
       "description": "Data Availability service configuration.",
       "allOf": [
@@ -67,6 +79,30 @@
       "description": "Address",
       "type": "string",
       "pattern": "^sov1[a-zA-Z0-9]+$"
+    },
+    "BatchEncryptionConfig": {
+      "oneOf": [
+        {
+          "description": "Static key configuration. The key is a hex-encoded 32-byte AES-256-GCM key.",
+          "type": "object",
+          "required": [
+            "encryption_key",
+            "type"
+          ],
+          "properties": {
+            "encryption_key": {
+              "description": "Hex-encoded AES-256-GCM encryption key.",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "static"
+              ]
+            }
+          }
+        }
+      ]
     },
     "BlockProducingConfig": {
       "description": "Configuration for block producing.",
@@ -1138,7 +1174,7 @@
       ],
       "properties": {
         "admin_addresses": {
-          "description": "The list of addresses that are allowed to perform admin operations on the sequencer.",
+          "description": "The list of addresses that are allowed to perform admin operations on the sequencer. The custom \"default\" is equivalent to Serde's default default, but without the bound `Address: Default`.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/Address"
