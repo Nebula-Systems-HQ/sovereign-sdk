@@ -283,6 +283,7 @@ impl Metric for AuthAndProcessMetrics {
             ("resolve_context_time_us", t.resolve_context_timer),
             ("check_uniqueness_time_us", t.check_uniqueness_timer),
             ("mark_tx_attempted_time_us", t.mark_tx_attempted_timer),
+            ("pre_reserve_gas_time_us", t.pre_reserve_gas_timer),
             ("attempt_tx_time_us", t.attempt_tx_timer),
             ("reserve_gas_time_us", t.reserve_gas_timer),
             ("refund_remaining_gas_time_us", t.refund_remaining_gas_timer),
@@ -301,6 +302,7 @@ impl Metric for AuthAndProcessMetrics {
             write!(buffer, "{field}={}", timer.elapsed().as_micros())?;
         }
 
+        summarize(&t.pre_reserve_gas_access_metrics, "pre_reserve_gas", buffer)?;
         summarize(&t.attempt_tx_access_metrics, "attempt_tx", buffer)?;
         Ok(())
     }
@@ -325,6 +327,10 @@ pub struct AuthAndProcessTimings {
     pub mark_tx_attempted_timer: MaybeTimer,
     /// State Accesses performed while marking the tx as attempted.
     pub mark_tx_attempted_access_metrics: StateMetrics,
+    /// Timer for the pre-reserve gas hook.
+    pub pre_reserve_gas_timer: MaybeTimer,
+    /// State Accesses performed while running the pre-reserve gas hook.
+    pub pre_reserve_gas_access_metrics: StateMetrics,
     /// Timer for executing the tx.
     pub attempt_tx_timer: MaybeTimer,
     /// State Accesses performed while executing the tx.
@@ -357,6 +363,8 @@ impl AuthAndProcessTimings {
             check_uniqueness_access_metrics: StateMetrics::default(),
             mark_tx_attempted_timer: MaybeTimer::default(),
             mark_tx_attempted_access_metrics: StateMetrics::default(),
+            pre_reserve_gas_timer: MaybeTimer::default(),
+            pre_reserve_gas_access_metrics: StateMetrics::default(),
             attempt_tx_timer: MaybeTimer::default(),
             attempt_tx_access_metrics: StateMetrics::default(),
             reserve_gas_timer: MaybeTimer::default(),

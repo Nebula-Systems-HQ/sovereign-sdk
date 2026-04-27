@@ -262,6 +262,21 @@ where
     metrics.timings.mark_tx_attempted_timer.end();
     metrics.timings.mark_tx_attempted_access_metrics = pre_exec_working_set.metrics().take();
 
+    metrics.timings.pre_reserve_gas_timer.start();
+    if let Err(err) = runtime.pre_reserve_gas(&message, &mut ctx, &mut pre_exec_working_set) {
+        let (scratchpad, pre_exec_gas_meter) = pre_exec_working_set.revert();
+        return (
+            Err((
+                TxProcessingError::PreReserveGasFailed(err.to_string()),
+                raw_tx,
+            )),
+            scratchpad,
+            pre_exec_gas_meter,
+        );
+    }
+    metrics.timings.pre_reserve_gas_timer.end();
+    metrics.timings.pre_reserve_gas_access_metrics = pre_exec_working_set.metrics().take();
+
     metrics.timings.reserve_gas_timer.start();
     let gas_price = pre_exec_working_set.gas_price();
     if let Err(err) =
@@ -319,22 +334,50 @@ where
     let transaction_consumption = &apply_tx.transaction_consumption;
 
     metrics.timings.refund_remaining_gas_timer.start();
+    let remaining = transaction_consumption.remaining_funds();
+    let base_fee_val = transaction_consumption.base_fee_value();
     runtime.gas_enforcer().refund_remaining_gas(
         ctx.gas_refund_recipient(),
-        &transaction_consumption.remaining_funds(),
+        &remaining,
         &mut scratchpad,
     );
     metrics.timings.refund_remaining_gas_timer.end();
     metrics.timings.refund_remaining_gas_access_metrics = scratchpad.metrics().take();
 
     metrics.timings.reward_prover_timer.start();
-    runtime.gas_enforcer().reward_prover(
-        &transaction_consumption.base_fee_value(),
-        operating_mode,
-        &mut scratchpad,
-    );
+    runtime
+        .gas_enforcer()
+        .reward_prover(&base_fee_val, operating_mode, &mut scratchpad);
     metrics.timings.reward_prover_timer.end();
     metrics.timings.reward_prover_access_metrics = scratchpad.metrics().take();
+
+    // Emit a gas consumed event so the indexer can track gas balance changes.
+    // Uses the Bank module via the runtime to emit a proper TokenTransferred event.
+    #[cfg(feature = "native")]
+    {
+        let gas_payer = ctx.gas_refund_recipient();
+        let priority_fee = transaction_consumption.priority_fee();
+        let gas_amount = Amount::new(base_fee_val.0 .0 + priority_fee.0 .0);
+        if gas_amount > Amount::ZERO {
+            runtime.on_gas_charged(
+                &mut scratchpad,
+                gas_payer,
+                &sequencer_rollup_address,
+                gas_amount,
+            );
+        }
+
+        let gas_events = scratchpad.take_events();
+        if !gas_events.is_empty() {
+            let mut apply_tx = apply_tx;
+            let gas_stored_events = crate::stf_blueprint::convert_to_runtime_events::<S, R>(
+                gas_events,
+                raw_tx_hash.into(),
+            );
+            apply_tx.receipt.events.splice(0..0, gas_stored_events);
+            return (Ok(apply_tx), scratchpad, pre_exec_gas_meter);
+        }
+    }
 
     (Ok(apply_tx), scratchpad, pre_exec_gas_meter)
 }

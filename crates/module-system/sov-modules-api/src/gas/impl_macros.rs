@@ -211,7 +211,7 @@ macro_rules! impl_gas_unit {
 
         impl GasUnit<$n> {
             /// Creates a new [`GasUnit`] from an array of [`u64`].
-            const fn from_primitive(array: [u64; $n]) -> Self {
+            pub const fn from_primitive(array: [u64; $n]) -> Self {
                 Self {
                     value: array,
                     #[cfg(feature = "gas-constant-estimation")]

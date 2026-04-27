@@ -42,8 +42,8 @@ pub use genesis::GenesisStateAccessor;
 pub use internals::AccessoryDelta;
 pub use kernel::{BootstrapWorkingSet, KernelStateAccessor};
 pub use scratchpad::{
-    LayeredRevertableTxState, PreExecWorkingSet, RevertableTxState, TxChangeSet, TxScratchpad,
-    WorkingSet,
+    GasPayerError, GasSnapshot, LayeredRevertableTxState, PreExecWorkingSet, RevertableTxState,
+    TxChangeSet, TxScratchpad, WorkingSet,
 };
 pub use temp_cache::BorshSerializedSize;
 
@@ -104,6 +104,7 @@ impl<S: Spec> StateProvider<S> for StateCheckpoint<S> {
         TxScratchpad {
             inner: RevertableWriter::new(self),
             phantom: PhantomData,
+            events: Vec::new(),
         }
     }
 }
@@ -114,6 +115,7 @@ impl<S: Spec> StateProvider<S> for ApiStateAccessor<S> {
         TxScratchpad {
             inner: RevertableWriter::new(self),
             phantom: PhantomData,
+            events: Vec::new(),
         }
     }
 }

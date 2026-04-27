@@ -7,9 +7,10 @@ mod tests;
 #[cfg(any(feature = "test-utils", feature = "evm"))]
 pub use accessors::UnmeteredStateWrapper;
 pub use accessors::{
-    AccessoryDelta, BootstrapWorkingSet, BorshSerializedSize, ChangeSet, GenesisStateAccessor,
-    KernelStateAccessor, LayeredRevertableTxState, PreExecWorkingSet, RevertableTxState,
-    StateCheckpoint, StateMetricsProvider, StateProvider, TxChangeSet, TxScratchpad, WorkingSet,
+    AccessoryDelta, BootstrapWorkingSet, BorshSerializedSize, ChangeSet, GasPayerError,
+    GasSnapshot, GenesisStateAccessor, KernelStateAccessor, LayeredRevertableTxState,
+    PreExecWorkingSet, RevertableTxState, StateCheckpoint, StateMetricsProvider, StateProvider,
+    TxChangeSet, TxScratchpad, WorkingSet,
 };
 #[cfg(feature = "native")]
 pub use accessors::{
@@ -23,9 +24,9 @@ pub use traits::ProvenStateAccessor;
 pub use traits::{
     charge_write, AccessoryStateReader, AccessoryStateReaderAndWriter, AccessoryStateWriter,
     GenesisState, InfallibleKernelStateAccessor, InfallibleStateAccessor,
-    InfallibleStateReaderAndWriter, PerBlockCache, PrivilegedKernelAccessor, ProvableStateReader,
-    ProvableStateWriter, StateAccessor, StateAccessorError, StateReader, StateReaderAndWriter,
-    StateWriter, TxState, VersionReader,
+    InfallibleStateReaderAndWriter, PerBlockCache, PinnedCacheAccessor, PrivilegedKernelAccessor,
+    ProvableStateReader, ProvableStateWriter, StateAccessor, StateAccessorError, StateReader,
+    StateReaderAndWriter, StateWriter, TxState, VersionReader,
 };
 
 #[cfg(feature = "native")]

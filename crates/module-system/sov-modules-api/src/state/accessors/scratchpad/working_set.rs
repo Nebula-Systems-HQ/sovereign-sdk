@@ -171,6 +171,7 @@ impl<S: Spec> WorkingSet<S, StateCheckpoint<S>> {
         let tx_scratchpad = TxScratchpad {
             inner: RevertableWriter::new(state_checkpoint),
             phantom: PhantomData,
+            events: Vec::new(),
         };
 
         WorkingSet {
@@ -192,6 +193,7 @@ impl<S: Spec> WorkingSet<S, StateCheckpoint<S>> {
         let tx_scratchpad = TxScratchpad {
             inner: RevertableWriter::new(state_checkpoint),
             phantom: PhantomData,
+            events: Vec::new(),
         };
 
         WorkingSet {

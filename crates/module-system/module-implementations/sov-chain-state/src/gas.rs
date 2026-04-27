@@ -8,22 +8,22 @@ use thiserror::Error;
 
 use crate::{BlockGasInfo, ChainState};
 
-/// A non-zero `u8` ratio, useful for defining ratios and multiplicative constants.
+/// A non-zero `u32` ratio, useful for defining ratios and multiplicative constants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub struct NonZeroRatio(u8);
+pub struct NonZeroRatio(u32);
 
-/// An error that is returned if attempting to create a [`NonZeroRatio`] from `0_u8`.
+/// An error that is returned if attempting to create a [`NonZeroRatio`] from `0`.
 #[derive(Error, Debug)]
 #[error("This value cannot be set to 0")]
 pub struct NonZeroRatioConversionError;
 
 impl NonZeroRatio {
-    /// Creates a new [`NonZeroRatio`] from a [`u8`]. This method should be used to build constants of type [`NonZeroRatio`].
-    /// To build a [`NonZeroRatio`] at runtime, use the [`TryFrom<u8>`] trait.
+    /// Creates a new [`NonZeroRatio`] from a [`u32`]. This method should be used to build constants of type [`NonZeroRatio`].
+    /// To build a [`NonZeroRatio`] at runtime, use the [`TryFrom<u32>`] trait.
     ///
     /// # Safety
     /// This method panics if the provided value is `0`.
-    pub const fn from_u8_unwrap(value: u8) -> Self {
+    pub const fn from_u32_unwrap(value: u32) -> Self {
         if value == 0 {
             panic!("This value cannot be set to 0");
         }
@@ -44,8 +44,8 @@ impl NonZeroRatio {
             .expect("The ratio cannot be zero")
     }
 
-    /// Gets the ratio as a `u8`.
-    pub fn get(&self) -> u8 {
+    /// Gets the ratio as a `u32`.
+    pub fn get(&self) -> u32 {
         self.0
     }
 }
@@ -56,21 +56,15 @@ impl From<NonZeroRatio> for u64 {
     }
 }
 
-impl TryFrom<u8> for NonZeroRatio {
+impl TryFrom<u32> for NonZeroRatio {
     type Error = NonZeroRatioConversionError;
 
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
         if value == 0 {
             Err(NonZeroRatioConversionError)
         } else {
             Ok(Self(value))
         }
-    }
-}
-
-impl From<NonZeroRatio> for u8 {
-    fn from(value: NonZeroRatio) -> Self {
-        value.0
     }
 }
 
@@ -81,7 +75,7 @@ impl<S: Spec> ChainState<S> {
     /// This is sourced from the `constants.toml` file and then converted into a
     /// [`NonZeroRatio`].
     pub fn config_base_fee_change_denominator() -> NonZeroRatio {
-        NonZeroRatio::from_u8_unwrap(config_value!("BASE_FEE_MAX_CHANGE_DENOMINATOR"))
+        NonZeroRatio::from_u32_unwrap(config_value!("BASE_FEE_MAX_CHANGE_DENOMINATOR"))
     }
 
     /// Configuration value used to control the range of variation of the gas price elasticity.
@@ -89,7 +83,7 @@ impl<S: Spec> ChainState<S> {
     /// This is sourced from the `constants.toml` file and then converted into a
     /// [`NonZeroRatio`].
     pub fn config_elasticity_multiplier() -> NonZeroRatio {
-        NonZeroRatio::from_u8_unwrap(config_value!("ELASTICITY_MULTIPLIER"))
+        NonZeroRatio::from_u32_unwrap(config_value!("ELASTICITY_MULTIPLIER"))
     }
 
     /// Computes the gas target for the provided gas limit.
@@ -115,7 +109,7 @@ impl<S: Spec> ChainState<S> {
     ) -> Amount {
         // The gas target is equal to `gas_limit // config_elasticity_multiplier(`
         let gas_target = Self::config_elasticity_multiplier().apply_div_u64(gas_limit);
-        assert!((Self::config_base_fee_change_denominator().get() as u64).checked_mul(gas_target).is_some(), "Misconfiguration: The product of gas_target * baseconfig_base_fee_change_denominator must not excueed u64::MAX");
+        assert!((Self::config_base_fee_change_denominator().get() as u64).checked_mul(gas_target).is_some(), "Misconfiguration: The product of gas_target * base_fee_change_denominator must not exceed u64::MAX");
 
         if gas_used == gas_target {
             // We reached the gas target, so we don't need to update the base fee.
@@ -134,7 +128,7 @@ impl<S: Spec> ChainState<S> {
                 gas_used_delta: u64,
                 gas_target: u64,
                 base_fee_per_gas: u128,
-                base_fee_change_denominator: u8,
+                base_fee_change_denominator: u32,
             ) -> u128 {
                 let hi = base_fee_per_gas >> 64;
                 let lo = base_fee_per_gas & u64::MAX as u128;

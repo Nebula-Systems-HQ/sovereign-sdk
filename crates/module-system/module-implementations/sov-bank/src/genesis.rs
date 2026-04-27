@@ -2,11 +2,12 @@ use anyhow::{bail, Result};
 use schemars::JsonSchema;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use sov_modules_api::{GenesisState, Module, Spec};
+use sov_modules_api::{EventEmitter, GenesisState, Module, Spec};
 
+use crate::event::Event;
 use crate::token::{unique_holders, Token};
-use crate::utils::TokenHolderRef;
-use crate::{config_gas_token_id, Amount, Bank, TokenId};
+use crate::utils::{TokenHolder, TokenHolderRef};
+use crate::{config_gas_token_id, Amount, Bank, Coins, TokenId};
 
 /// Initial configuration for sov-bank module.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq, JsonSchema)]
@@ -123,6 +124,19 @@ impl<S: Spec> Bank<S> {
                 total_supply = total_supply
                     .checked_add(*balance)
                     .ok_or(anyhow::anyhow!("Overflowed token supply!"))?;
+
+                // Emit TokenMinted so the indexer sees genesis balances
+                self.emit_event(
+                    state,
+                    Event::TokenMinted {
+                        authorizer: TokenHolder::Module(self.id.clone()),
+                        mint_to_identity: TokenHolder::User(*address),
+                        coins: Coins {
+                            amount: *balance,
+                            token_id: *token_id,
+                        },
+                    },
+                );
             }
 
             let supply_cap = token_config.supply_cap.unwrap_or(Amount::MAX);
@@ -149,6 +163,22 @@ impl<S: Spec> Bank<S> {
                 token_name = %token.name,
                 token_id = %token_id,
                 "Token has been created"
+            );
+
+            // Emit TokenCreated so the indexer sees genesis tokens
+            self.emit_event(
+                state,
+                Event::TokenCreated {
+                    token_name: token_config.token_name.clone(),
+                    coins: Coins {
+                        amount: total_supply,
+                        token_id: *token_id,
+                    },
+                    mint_to_address: TokenHolder::Module(self.id.clone()),
+                    minter: TokenHolder::Module(self.id.clone()),
+                    supply_cap,
+                    admins: token.admins.clone(),
+                },
             );
         }
         Ok(())

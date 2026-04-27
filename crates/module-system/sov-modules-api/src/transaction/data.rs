@@ -16,6 +16,7 @@ use crate::{Amount, BasicGasMeter, Gas, GasArray, Spec};
 #[derive(
     From,
     Into,
+    Default,
     Serialize,
     Deserialize,
     BorshSerialize,
@@ -27,6 +28,7 @@ use crate::{Amount, BasicGasMeter, Gas, GasArray, Spec};
     Eq,
     PartialOrd,
     Ord,
+    schemars::JsonSchema,
     sov_rollup_interface::sov_universal_wallet::UniversalWallet,
 )]
 pub struct PriorityFeeBips(pub u64);

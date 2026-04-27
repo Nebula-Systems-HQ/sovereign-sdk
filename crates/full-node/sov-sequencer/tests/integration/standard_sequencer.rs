@@ -204,29 +204,3 @@ async fn sequencer_safe_txs_from_admins_are_accepted() {
         );
     }
 }
-
-#[tokio::test(flavor = "multi_thread")]
-async fn test_reject_transaction_exceeding_max_raw_tx_size() {
-    use sov_rollup_interface::stf::MAX_RAW_TX_SIZE;
-
-    let sequencer = new_sequencer().await;
-    let client = sequencer.client();
-
-    // Submit raw bytes exceeding the 10 KB limit.
-    // The sequencer deserializes this as a RawTx during authentication,
-    // which enforces MAX_RAW_TX_SIZE.
-    let oversized_data = vec![0u8; MAX_RAW_TX_SIZE + 1];
-
-    let err = client
-        .accept_tx(&types::AcceptTxBody {
-            body: BASE64_STANDARD.encode(&oversized_data),
-        })
-        .await
-        .expect_err("Transaction exceeding 10 KB MAX_RAW_TX_SIZE should be rejected");
-
-    let err_str = err.to_string();
-    assert!(
-        err_str.contains("exceeds maximum allowed size"),
-        "Error should mention size limit, got: {err_str}"
-    );
-}

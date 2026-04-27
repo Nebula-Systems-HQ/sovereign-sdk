@@ -138,6 +138,22 @@ pub trait Runtime<S: Spec>:
         0
     }
 
+    /// Hook called after authentication and uniqueness marking, but before gas reservation.
+    /// Runtimes can override this to redirect gas billing for delegated transactions
+    /// (for example by calling `context.set_gas_payer_override()`).
+    ///
+    /// Runs with full `TxState<S>` access, including kernel and accessory writes.
+    /// On failure, all state changes since the last [`crate::PreExecWorkingSet::commit`]
+    /// are reverted and the transaction is skipped.
+    fn pre_reserve_gas(
+        &mut self,
+        _call: &Self::Decodable,
+        _context: &mut Context<S>,
+        _state: &mut impl crate::TxState<S>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Checks if a system transaction should be rejected based on the totality of its context.
     fn is_unauthorized_system_tx(
         &self,
@@ -160,6 +176,18 @@ pub trait Runtime<S: Spec>:
         credential_id: &crate::CredentialId,
         state: &mut ST,
     ) -> Result<S::Address, ST::Error>;
+
+    /// Hook called after gas is charged for a transaction.
+    /// Runtimes should override this to emit a proper Bank TokenTransferred event.
+    /// The default implementation is a no-op.
+    fn on_gas_charged(
+        &self,
+        _state: &mut impl sov_state::EventContainer,
+        _gas_payer: &S::Address,
+        _sequencer: &S::Address,
+        _amount: crate::Amount,
+    ) {
+    }
 }
 
 #[cfg(feature = "native")]
@@ -204,6 +232,22 @@ pub trait Runtime<S: Spec>:
     /// Responsible for authenticating transactions.
     type Auth: TransactionAuthenticator<S>;
 
+    /// Hook called after authentication and uniqueness marking, but before gas reservation.
+    /// Runtimes can override this to redirect gas billing for delegated transactions
+    /// (for example by calling `context.set_gas_payer_override()`).
+    ///
+    /// Runs with full `TxState<S>` access, including kernel and accessory writes.
+    /// On failure, all state changes since the last [`crate::PreExecWorkingSet::commit`]
+    /// are reverted and the transaction is skipped.
+    fn pre_reserve_gas(
+        &mut self,
+        _call: &Self::Decodable,
+        _context: &mut Context<S>,
+        _state: &mut impl crate::TxState<S>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// Gets the operating mode of the runtime (Zk or Optimistic).
     fn operating_mode(genesis: &Self::GenesisConfig) -> OperatingMode;
 
@@ -220,6 +264,16 @@ pub trait Runtime<S: Spec>:
         _state: &mut impl crate::TxState<S>,
     ) -> bool {
         false
+    }
+
+    /// Hook called after gas is charged for a transaction. No-op in non-native mode.
+    fn on_gas_charged(
+        &self,
+        _state: &mut impl sov_state::EventContainer,
+        _gas_payer: &S::Address,
+        _sequencer: &S::Address,
+        _amount: crate::Amount,
+    ) {
     }
 }
 

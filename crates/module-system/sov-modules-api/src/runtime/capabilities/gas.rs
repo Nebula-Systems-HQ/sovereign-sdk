@@ -58,7 +58,7 @@ pub trait GasEnforcer<S: Spec> {
     /// This method should not fail.
     ///
     /// ## Correctness note
-    /// The caller of this method must ensure that sufficient funds are reserved.  
+    /// The caller of this method must ensure that sufficient funds are reserved.
     /// If there are not enough funds reserved, the method will panic.
     fn reward_prover(
         &mut self,
@@ -71,7 +71,7 @@ pub trait GasEnforcer<S: Spec> {
     /// This method should not fail.
     ///
     /// ## Correctness note
-    /// The caller of this method must ensure that sufficient funds are reserved.  
+    /// The caller of this method must ensure that sufficient funds are reserved.
     /// If there are not enough funds reserved, the method will panic.
     fn refund_remaining_gas(
         &mut self,

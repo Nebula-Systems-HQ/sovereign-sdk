@@ -19,7 +19,6 @@ use tracing::{enabled, instrument, Level, Span};
 use super::accessors::seal::UniversalStateAccessor;
 use super::accessors::{BorshSerializedSize, TempCache};
 use crate::capabilities::RollupHeight;
-use crate::state::accessors::LayeredRevertableTxState;
 use crate::state::accessors::StateMetricsProvider;
 #[cfg(any(feature = "test-utils", feature = "evm"))]
 use crate::UnmeteredStateWrapper;
@@ -88,6 +87,7 @@ impl<T> InfallibleKernelStateAccessor for T where
 {
 }
 
+/// A trait that allows access to the pinned cache and storage of a state accessor.
 pub trait PinnedCacheAccessor<S: Spec> {
     /// Returns a mutable reference to the pinned cache backing this accessor, if any exists.
     fn pinned_cache_mut(&mut self) -> Option<&mut PinnedCache>;
@@ -112,11 +112,11 @@ pub trait TxState<S: Spec>:
     + StateMetricsProvider
     + PinnedCacheAccessor<S>
 {
-    /// Converts this state accessor into a layered revertable state.
+    /// Converts this state accessor into a [`super::accessors::LayeredRevertableTxState`].
     ///
     /// You *MUST* call .commit_layer() to save the changes from the resulting accessor if you want them to be persisted
-    fn to_revertable_layered(&mut self) -> LayeredRevertableTxState<'_, S, Self> {
-        LayeredRevertableTxState::new(self)
+    fn to_revertable_layered(&mut self) -> super::accessors::LayeredRevertableTxState<'_, S, Self> {
+        super::accessors::LayeredRevertableTxState::new(self)
     }
 
     /// Converts this state accessor into a [`RevertableTxState`].
@@ -549,8 +549,9 @@ impl<T: AccessoryStateWriter> StateWriter<Accessory> for T {
 pub trait ProvenStateAccessor<N: ProvableCompileTimeNamespace>: StateReaderAndWriter<N> {
     /// The underlying storage whose proof is returned
     type Proof;
-    /// Fetch the value with the requested key and provide a proof of its presence/absence.
-    fn get_with_proof(&mut self, key: SlotKey) -> Option<StorageProof<Self::Proof>>
+    /// Fetch the value with the requested key and provide a proof of its presence/absence against the latest state root. Historical proofs are not supported,
+    /// so queries against an archival state accessor will still return the latest state root.
+    fn get_global_latest_with_proof(&mut self, key: SlotKey) -> Option<StorageProof<Self::Proof>>
     where
         Self: StateReaderAndWriter<N>,
         N: ProvableCompileTimeNamespace;
