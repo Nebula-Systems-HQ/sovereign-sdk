@@ -8,6 +8,7 @@ const AES_256_KEY_SIZE: usize = 32;
 
 #[derive(Clone)]
 pub struct BatchEncryptionKey {
+    #[cfg_attr(not(feature = "aes-encryption"), allow(dead_code))]
     material: Arc<SecretBox<Vec<u8>>>,
 }
 
@@ -34,6 +35,7 @@ impl BatchEncryptionKey {
         })
     }
 
+    #[cfg_attr(not(feature = "aes-encryption"), allow(dead_code))]
     pub(crate) fn expose_for_crypto(&self) -> &[u8] {
         self.material.expose_secret()
     }
@@ -48,7 +50,7 @@ impl std::fmt::Debug for BatchEncryptionKey {
 }
 
 pub trait BatchEncryptionKeyProvider: Send + Sync + std::fmt::Debug {
-    fn active_key(&self) -> BatchEncryptionKey;
+    fn active_key(&self) -> Result<BatchEncryptionKey, EncryptionError>;
 }
 
 #[derive(Debug, Clone)]
@@ -63,8 +65,8 @@ impl StaticKeyProvider {
 }
 
 impl BatchEncryptionKeyProvider for StaticKeyProvider {
-    fn active_key(&self) -> BatchEncryptionKey {
-        self.key.clone()
+    fn active_key(&self) -> Result<BatchEncryptionKey, EncryptionError> {
+        Ok(self.key.clone())
     }
 }
 
@@ -113,7 +115,7 @@ mod tests {
         let key = BatchEncryptionKey::from_hex(&valid_key_hex()).unwrap();
         let provider = StaticKeyProvider::new(key.clone());
         assert_eq!(
-            provider.active_key().expose_for_crypto(),
+            provider.active_key().unwrap().expose_for_crypto(),
             key.expose_for_crypto()
         );
     }
