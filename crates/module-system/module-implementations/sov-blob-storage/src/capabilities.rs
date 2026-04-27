@@ -1393,13 +1393,18 @@ fn data_for_deserialization(blob: &mut impl BlobReaderTrait) -> &[u8] {
 mod tests {
     use std::num::NonZeroU8;
 
-    use sov_mock_da::MOCK_SEQUENCER_DA_ADDRESS;
-    use sov_test_utils::TestSpec;
+    use sov_mock_da::{MockBlob, MOCK_SEQUENCER_DA_ADDRESS};
+    use sov_modules_api::capabilities::{HasKernel, Kernel};
+    use sov_test_utils::runtime::genesis::optimistic::HighLevelOptimisticGenesisConfig;
+    use sov_test_utils::runtime::TestRunner;
+    use sov_test_utils::{generate_optimistic_runtime, TestSpec};
 
     use super::{
         BlobStorage, BlobType, PreferredBatchData, PreferredBlobData, PreferredBlobDataWithId,
-        PreferredProofData, SequencerNumberTracker,
+        PreferredProofData, SequencerNumberTracker, ENCRYPTED_PREFERRED_BATCH_DATA_VERSION,
     };
+
+    generate_optimistic_runtime!(EncryptedBlobTestRuntime <=);
 
     #[test]
     fn encrypted_batch_round_trips_to_preferred_batch_data() {
@@ -1436,6 +1441,101 @@ mod tests {
                 .unwrap();
 
         assert_eq!(decoded.len(), 1);
+    }
+
+    #[test]
+    fn encrypted_batch_with_unsupported_version_slashes_sender() {
+        let layer = encryption_layer();
+        let encrypted = encrypted_batch_with_payload(
+            ENCRYPTED_PREFERRED_BATCH_DATA_VERSION + 1,
+            layer
+                .encrypt(&borsh::to_vec(&Vec::<sov_modules_api::FullyBakedTx>::new()).unwrap())
+                .unwrap(),
+        );
+
+        assert_encrypted_batch_rejected_and_sender_slashed(encrypted, &layer);
+    }
+
+    #[test]
+    fn encrypted_batch_with_bad_ciphertext_slashes_sender() {
+        let layer = encryption_layer();
+        let encrypted =
+            encrypted_batch_with_payload(ENCRYPTED_PREFERRED_BATCH_DATA_VERSION, vec![0; 16]);
+
+        assert_encrypted_batch_rejected_and_sender_slashed(encrypted, &layer);
+    }
+
+    #[test]
+    fn encrypted_batch_with_non_borsh_transactions_slashes_sender() {
+        let layer = encryption_layer();
+        let encrypted = encrypted_batch_with_payload(
+            ENCRYPTED_PREFERRED_BATCH_DATA_VERSION,
+            layer.encrypt(b"not borsh transaction bytes").unwrap(),
+        );
+
+        assert_encrypted_batch_rejected_and_sender_slashed(encrypted, &layer);
+    }
+
+    fn encryption_layer() -> sov_encryption::EncryptionLayer {
+        sov_encryption::EncryptionLayer::from_config(
+            sov_encryption::BatchEncryptionConfig::Static {
+                encryption_key: "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+                    .to_string(),
+            },
+        )
+        .unwrap()
+    }
+
+    fn encrypted_batch_with_payload(
+        encryption_format_version: u8,
+        encrypted_txs_data: Vec<u8>,
+    ) -> crate::EncryptedPreferredBatchData {
+        crate::EncryptedPreferredBatchData {
+            encryption_format_version,
+            sequence_number: 0,
+            encrypted_txs_data,
+            visible_slots_to_advance: std::num::NonZero::new(1).unwrap(),
+            tx_hashes: std::sync::Arc::new(vec![]),
+        }
+    }
+
+    fn assert_encrypted_batch_rejected_and_sender_slashed(
+        encrypted: crate::EncryptedPreferredBatchData,
+        layer: &sov_encryption::EncryptionLayer,
+    ) {
+        let genesis_config = HighLevelOptimisticGenesisConfig::<TestSpec>::generate();
+        let preferred_sender = genesis_config.initial_sequencer.da_address;
+        let genesis = GenesisConfig::from_minimal_config(genesis_config.into());
+        let mut runner =
+            TestRunner::<EncryptedBlobTestRuntime<TestSpec>, TestSpec>::new_with_genesis(
+                genesis.into_genesis_params(),
+                EncryptedBlobTestRuntime::<TestSpec>::default(),
+            );
+        let mut blob =
+            MockBlob::new_with_hash(borsh::to_vec(&encrypted).unwrap(), preferred_sender);
+
+        runner.__apply_to_state(|state| {
+            let mut runtime = EncryptedBlobTestRuntime::<TestSpec>::default();
+            let mut kernel_state = runtime.kernel().accessor(state);
+            let mut blob_storage = BlobStorage::<TestSpec>::default();
+
+            let result = blob_storage.process_batch_from_blob(
+                &mut blob,
+                None,
+                &mut kernel_state,
+                Some(layer),
+            );
+
+            assert!(result.is_none());
+            assert!(blob_storage
+                .sequencer_registry
+                .is_sender_allowed(&preferred_sender, &mut kernel_state)
+                .is_err());
+            assert!(blob_storage
+                .sequencer_registry
+                .preferred_sequencer(&mut kernel_state)
+                .is_none());
+        });
     }
 
     #[test]

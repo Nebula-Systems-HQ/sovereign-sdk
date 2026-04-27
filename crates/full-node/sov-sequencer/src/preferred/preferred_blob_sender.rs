@@ -232,7 +232,9 @@ mod tests {
 
     use borsh::BorshDeserialize;
     use sov_blob_sender::new_blob_id;
-    use sov_blob_storage::{EncryptedPreferredBatchData, PreferredBatchData};
+    use sov_blob_storage::{
+        EncryptedPreferredBatchData, PreferredBatchData, ENCRYPTED_PREFERRED_BATCH_DATA_VERSION,
+    };
     use sov_encryption::{BatchEncryptionConfig, EncryptionLayer};
     use sov_modules_api::{FullyBakedTx, TxHash, VisibleSlotNumber};
 
@@ -284,7 +286,10 @@ mod tests {
 
         let encrypted = EncryptedPreferredBatchData::try_from_slice(&bytes).unwrap();
         assert_eq!(encrypted.sequence_number, 7);
-        assert_eq!(encrypted.encryption_format_version, 1);
+        assert_eq!(
+            encrypted.encryption_format_version,
+            ENCRYPTED_PREFERRED_BATCH_DATA_VERSION
+        );
         let decrypted = layer.decrypt(&encrypted.encrypted_txs_data).unwrap();
         let txs = Vec::<FullyBakedTx>::try_from_slice(&decrypted).unwrap();
         assert_eq!(txs.len(), 2);
