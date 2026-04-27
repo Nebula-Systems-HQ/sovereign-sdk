@@ -117,6 +117,7 @@ pub struct RollupBuilderConfig<S: Spec> {
     pub start_at_rollup_height: Option<RollupHeight>,
     pub stop_at_rollup_height: Option<RollupHeight>,
     pub extension: Option<SeqConfigExtension>,
+    pub batch_encryption: Option<sov_encryption::BatchEncryptionConfig>,
 }
 
 /// A one-stop shop for building entire rollups and starting them in the
@@ -209,6 +210,14 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
         if let SequencerKindConfig::Preferred(ref mut config) = &mut self.config.sequencer_config {
             config.disable_state_root_consistency_checks = true;
         }
+        self
+    }
+
+    pub fn with_batch_encryption_config(
+        mut self,
+        config: sov_encryption::BatchEncryptionConfig,
+    ) -> Self {
+        self.config.batch_encryption = Some(config);
         self
     }
 
@@ -388,6 +397,7 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
                 blob_processing_timeout_secs: self.config.blob_processing_timeout_secs,
                 extension: self.config.extension,
             },
+            batch_encryption: self.config.batch_encryption.clone(),
 
             monitoring: MonitoringConfig {
                 telegraf_address: self.config.telegraf_address,
@@ -429,6 +439,7 @@ impl<R: FullNodeBlueprint<Native> + Default + 'static> RollupBuilder<R> {
                 max_log_limit: 20000,
                 response_size_limit: (1024 * 1024) - (1024 * 30), // Limit our response size to 1MB, leaving 30kb for headers, overhead, and misestimation.
             }),
+            batch_encryption: None,
         }
     }
 }
