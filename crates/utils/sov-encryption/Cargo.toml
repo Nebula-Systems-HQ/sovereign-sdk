@@ -10,57 +10,23 @@ publish.workspace = true
 
 [features]
 default = ["aes-encryption"]
-
-# Core encryption without external key fetching
 aes-encryption = ["aes-gcm", "rand"]
-
-# Key client implementations
-unix-client = ["tokio/net", "tokio/macros"]
+unix-client = []
 
 [dependencies]
-# Core encryption (optional, enabled by default)
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc", "getrandom"], optional = true }
 rand = { workspace = true, optional = true }
-
-# Async runtime (needed for key listener)
-tokio = { workspace = true, features = ["time", "net", "rt", "io-util", "sync"] }
-tokio-util = { version = "0.7", features = ["codec"] }
-futures = { workspace = true, features = ["alloc"] }
-async-trait = { workspace = true }
-
-# Binary serialization for key exchange
-bincode = "1.3"
-
-
-# Serialization and utilities
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-bytes = { workspace = true }
 hex = { workspace = true }
-
-# Error handling
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-
-# JSON Schema for configuration
 schemars = { workspace = true, features = ["derive"] }
-
-# Logging
 tracing = { workspace = true }
-
-# Synchronization
-parking_lot = "0.12"
-
-# Secret handling (zeroize on drop, no accidental logging)
 secrecy = { version = "0.10", features = ["serde"] }
-
-# Time handling
-chrono = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tokio-test = "0.4"
-tokio = { workspace = true, features = ["test-util", "macros"] }
 
 [lints]
 workspace = true

@@ -1,11 +1,5 @@
 #[derive(thiserror::Error, Debug)]
 pub enum EncryptionError {
-    #[error("Failed to connect to key server: {0}")]
-    KeyServerConnection(#[from] std::io::Error),
-
-    #[error("Key server response error: {0}")]
-    KeyServerResponse(String),
-
     #[error("Encryption failed: {0}")]
     EncryptionFailed(String),
 
@@ -18,9 +12,6 @@ pub enum EncryptionError {
     #[error("Invalid ciphertext format: {0}")]
     InvalidCiphertextFormat(String),
 
-    #[error("Key rotation error: {0}")]
-    KeyRotation(String),
-
     #[error("Configuration error: {0}")]
     Configuration(String),
 
@@ -29,15 +20,4 @@ pub enum EncryptionError {
 
     #[error("Hex decoding error: {0}")]
     HexError(#[from] hex::FromHexError),
-}
-
-impl EncryptionError {
-    pub fn is_retryable(&self) -> bool {
-        matches!(
-            self,
-            EncryptionError::KeyServerConnection(_)
-                | EncryptionError::KeyServerResponse(_)
-                | EncryptionError::KeyRotation(_)
-        )
-    }
 }
