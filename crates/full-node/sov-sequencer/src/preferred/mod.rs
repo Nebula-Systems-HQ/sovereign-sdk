@@ -26,7 +26,7 @@ use crate::preferred::rpc_errors::{cant_fit_tx, rate_limit, replica_mode, shut_d
 use async_trait::async_trait;
 use axum::http::StatusCode;
 use batch_size_tracker::BatchSizeTracker;
-use db::postgres::PostgresBackend;
+use db::postgres::{PostgresBackend, PostgresTxIngressGate};
 use db::rocksdb::RocksDbBackend;
 pub use db::SequencerRole;
 use db::{PreferredSequencerDb, ReadBatch, ReadBlob};
@@ -70,7 +70,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use sync_sequencer_state::*;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tracing::{error, info, trace};
@@ -78,9 +78,9 @@ use transaction_subscriptions::TransactionCache;
 
 use crate::common::{
     error_not_fully_synced, generic_accept_tx_error, loop_send_tx_notifications, poll_state_update,
-    pre_exec_err_to_accept_tx_err, AcceptedTx, ForcedTxBatchNotification, Sequencer,
-    SequencerEventStream, StateUpdateError, StateUpdateNotification, SubscriptionStreamError,
-    WithCachedTxHashes,
+    pre_exec_err_to_accept_tx_err, tx_ingress_disabled, AcceptedTx, ForcedTxBatchNotification,
+    Sequencer, SequencerEventStream, SetTxIngressStatus, StateUpdateError, StateUpdateNotification,
+    SubscriptionStreamError, TxIngressStatus, WithCachedTxHashes,
 };
 use crate::metrics::{track_in_progress_batch_size, PreferredSequencerFetchBatchesToReplayMetrics};
 use crate::preferred::block_executor::{RollupBlockExecutor, RollupBlockExecutorError};
@@ -97,6 +97,49 @@ type VisibleSlotNumberIncrease = NonZero<u8>;
 
 // Big info dump for the user that would make the code hard to read if it were inline.
 const RECOVERY_ERROR_MESSAGE_ON_NONE_STRATEGY: &str = "The preferred sequencer is too far behind, and the visible slot number has lagged more than the allowed deferred slots count. This means some non-preferred batches may have been included by the node, if there were any. If this happened, already provided soft confirmations may now no longer be valid. Because the recovery_strategy config was set to None, we are not attempting recovery at this point. You should either: a) delete everything from the preferred_sequencer database (thus annulling all currently pending soft confirmations), which will allow you to restart the sequencer fresh; or b) set the recovery_strategy config value to TryToSave, in which case all pending batches will be flushed to be executed on a best-effort basis. The latter may save some soft-confirmations if they have not been invalidated yet. However, IF a non-preferred batch has been included, AND some soft-confirmations have been invalidated by it, this will cause the sequencer to be penalised for every invalid batch; ensure your sequencer bond is sufficient to cover any penalties to be able to continue operating uninterrupted.";
+
+#[derive(Clone)]
+enum TxIngressGate {
+    Postgres(PostgresTxIngressGate),
+    InMemory(Arc<RwLock<TxIngressStatus>>),
+}
+
+impl TxIngressGate {
+    async fn connect(postgres_config: Option<&PostgresConfig>) -> anyhow::Result<Self> {
+        match postgres_config {
+            Some(config) if config.node_role != ConfiguredNodeRole::ReplicaNoLeaderSync => Ok(
+                Self::Postgres(PostgresTxIngressGate::connect(config).await?),
+            ),
+            None => Ok(Self::InMemory(Arc::new(RwLock::new(
+                TxIngressStatus::enabled(),
+            )))),
+            Some(_) => Ok(Self::InMemory(Arc::new(RwLock::new(
+                TxIngressStatus::enabled(),
+            )))),
+        }
+    }
+
+    async fn status(&self) -> anyhow::Result<TxIngressStatus> {
+        match self {
+            Self::Postgres(gate) => gate.status().await,
+            Self::InMemory(status) => Ok(status.read().await.clone()),
+        }
+    }
+
+    async fn set_status(&self, request: SetTxIngressStatus) -> anyhow::Result<TxIngressStatus> {
+        match self {
+            Self::Postgres(gate) => gate.set_status(request).await,
+            Self::InMemory(status) => {
+                let mut status = status.write().await;
+                status.enabled = request.enabled;
+                status.reason = request.reason;
+                status.updated_by = request.updated_by;
+                status.generation += 1;
+                Ok(status.clone())
+            }
+        }
+    }
+}
 
 /// A [`Sequencer`] with instant transaction confirmation.
 #[derive(derivative::Derivative, Deref)]
@@ -121,6 +164,7 @@ where
     api_state: ApiState<S>,
     _runtime: PhantomData<(Rt, Da)>,
     pub(crate) config: SequencerConfig<S::Address, PreferredSequencerConfig<S::Address>>,
+    tx_ingress_gate: TxIngressGate,
     /// Used for intelligently buffering nonce-based TXs if they arrive out of order.
     nonce_buffer_input: NonceBufferInputSender<SequencerTxExecutionBackend<S, Rt>, S, Rt>,
     shutdown_receiver: watch::Receiver<()>,
@@ -386,6 +430,20 @@ where
         if self.shutdown_receiver.has_changed().unwrap_or(true) {
             tracing::info!("The sequencer is shutting down. Cannot accept transactions");
             return Err(shut_down());
+        }
+
+        let ingress_status = self
+            .tx_ingress_gate
+            .status()
+            .await
+            .map_err(database_error_500)?;
+        if !ingress_status.enabled {
+            tracing::info!(
+                reason = ?ingress_status.reason,
+                generation = ingress_status.generation,
+                "Transaction ingress is disabled. Cannot accept transactions"
+            );
+            return Err(tx_ingress_disabled(ingress_status));
         }
 
         let original_tx_queue_id = self.tx_queue_id.load(Ordering::Acquire);
@@ -793,6 +851,17 @@ where
             .await
             .map_err(|_| SequencerNotReadyDetails::Shutdown)?
             .map(|_| ())
+    }
+
+    async fn tx_ingress_status(&self) -> anyhow::Result<TxIngressStatus> {
+        self.tx_ingress_gate.status().await
+    }
+
+    async fn set_tx_ingress_status(
+        &self,
+        status: SetTxIngressStatus,
+    ) -> anyhow::Result<TxIngressStatus> {
+        self.tx_ingress_gate.set_status(status).await
     }
 
     fn api_state(&self) -> ApiState<Self::Spec> {

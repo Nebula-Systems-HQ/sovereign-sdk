@@ -33,7 +33,10 @@ use tokio::sync::watch::Receiver;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tokio_stream::wrappers::BroadcastStream;
 
-use crate::common::{error_not_fully_synced, AcceptedTx, Sequencer, SubscriptionStreamError};
+use crate::common::{
+    error_not_fully_synced, AcceptedTx, Sequencer, SetTxIngressStatus, SubscriptionStreamError,
+    TxIngressStatus,
+};
 use crate::TxStatus;
 
 /// Interval between ping frames sent to the client for keepalive.
@@ -168,6 +171,11 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
             .route(
                 "/sequencer/txs/submit/ws",
                 axum::routing::get(Self::axum_ws_submit_tx),
+            )
+            .route(
+                "/admin/sequencer/tx-ingress",
+                axum::routing::get(Self::axum_get_tx_ingress_status)
+                    .put(Self::axum_set_tx_ingress_status),
             )
             .route(
                 "/sequencer/unstable/events/:eventId",
@@ -465,6 +473,37 @@ impl<Seq: Sequencer> SequencerApis<Seq> {
             Ok(()) => Ok(().into()),
             Err(details) => Err(error_not_fully_synced(details).into_response()),
         }
+    }
+
+    async fn axum_get_tx_ingress_status(state: State<Self>) -> ApiResult<TxIngressStatus> {
+        state
+            .sequencer
+            .tx_ingress_status()
+            .await
+            .map(Into::into)
+            .map_err(|e| {
+                tracing::error!(error = %e, "Error reading transaction ingress status");
+                errors::internal_server_error_response_500(
+                    "Unable to read transaction ingress status",
+                )
+            })
+    }
+
+    async fn axum_set_tx_ingress_status(
+        state: State<Self>,
+        request: Json<SetTxIngressStatus>,
+    ) -> ApiResult<TxIngressStatus> {
+        state
+            .sequencer
+            .set_tx_ingress_status(request.0)
+            .await
+            .map(Into::into)
+            .map_err(|e| {
+                tracing::error!(error = %e, "Error updating transaction ingress status");
+                errors::internal_server_error_response_500(
+                    "Unable to update transaction ingress status",
+                )
+            })
     }
 
     async fn axum_get_role(state: State<Self>) -> ApiResult<crate::SequencerRole> {

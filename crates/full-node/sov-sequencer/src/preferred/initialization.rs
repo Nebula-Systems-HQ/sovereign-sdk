@@ -120,6 +120,8 @@ where
         let (api_state, checkpoint_sender) = Self::api_state(latest_state_update.storage.clone());
 
         let (blobs_sender_channel, _) = broadcast::channel(preferred_config.events_channel_size);
+        let tx_ingress_gate =
+            TxIngressGate::connect(preferred_config.postgres_config.as_ref()).await?;
 
         let (db, seq_role) = PreferredSequencerDb::new(
             shutdown_sender.clone(),
@@ -260,6 +262,7 @@ where
             api_state,
             _runtime: PhantomData,
             config: config.clone(),
+            tx_ingress_gate,
             nonce_buffer_input,
             shutdown_receiver: shutdown_receiver.clone(),
             shutdown_sender: shutdown_sender.clone(),
