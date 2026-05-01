@@ -1,6 +1,41 @@
 use super::*;
+use crate::SetTxIngressStatus;
 use sov_modules_api::VisibleSlotNumber;
 use std::{num::NonZero, sync::Arc};
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_tx_ingress_gate_persists_state() {
+    let Some(postgres) = setup_test_postgres().await else {
+        return;
+    };
+
+    let config = config_from_postgres_container(
+        &postgres,
+        String::from("node_id_1"),
+        ConfiguredNodeRole::Leader,
+    )
+    .await
+    .unwrap();
+    let gate = PostgresTxIngressGate::connect(&config).await.unwrap();
+
+    let initial_status = gate.status().await.unwrap();
+    assert!(initial_status.enabled);
+
+    let disabled_status = gate
+        .set_status(SetTxIngressStatus {
+            enabled: false,
+            reason: Some(String::from("upgrade")),
+            updated_by: Some(String::from("test")),
+        })
+        .await
+        .unwrap();
+    assert!(!disabled_status.enabled);
+    assert_eq!(disabled_status.reason.as_deref(), Some("upgrade"));
+    assert_eq!(disabled_status.updated_by.as_deref(), Some("test"));
+
+    let second_gate = PostgresTxIngressGate::connect(&config).await.unwrap();
+    assert_eq!(second_gate.status().await.unwrap(), disabled_status);
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_db_operations_leader() {

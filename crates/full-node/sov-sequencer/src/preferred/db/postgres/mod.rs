@@ -8,6 +8,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::Duration;
 
 use super::{DbBackend, ReadBlob, SnapshotData, StoredBlob};
+use crate::common::{SetTxIngressStatus, TxIngressStatus};
 use crate::preferred::db::DbError;
 use crate::preferred::db::{BatchToStore, DbReadOutcome, InProgressBatch};
 use anyhow::Context;
@@ -32,11 +33,41 @@ pub(crate) struct SequencerLeader {
     pub(crate) leader_acquired_at: OffsetDateTime,
 }
 
+#[derive(Debug, Clone, FromRow, PartialEq)]
+struct TxIngressGateRow {
+    enabled: bool,
+    reason: Option<String>,
+    updated_by: Option<String>,
+    updated_at: OffsetDateTime,
+    generation: i64,
+}
+
+impl TryFrom<TxIngressGateRow> for TxIngressStatus {
+    type Error = anyhow::Error;
+
+    fn try_from(row: TxIngressGateRow) -> Result<Self> {
+        Ok(Self {
+            enabled: row.enabled,
+            reason: row.reason,
+            updated_by: row.updated_by,
+            updated_at: Some(row.updated_at.to_string()),
+            generation: u64::try_from(row.generation)
+                .context("Invalid negative tx ingress generation")?,
+        })
+    }
+}
+
 pub struct PostgresBackend {
     pool: PgPool,
     backoff_policy: ExponentialBuilder,
     node_id: String,
     pub(crate) node_address: String,
+}
+
+#[derive(Clone)]
+pub(crate) struct PostgresTxIngressGate {
+    pool: PgPool,
+    backoff_policy: ExponentialBuilder,
 }
 
 // We need a macro to get around lifetime issues with async functions. Otherwise, Rust complains about FnMut
@@ -464,6 +495,99 @@ impl PostgresBackend {
             Some(leader_id) => leader_id == &self.node_id,
             None => false,
         }
+    }
+}
+
+impl PostgresTxIngressGate {
+    pub(crate) async fn connect(config: &PostgresConfig) -> Result<Self> {
+        let backoff_policy = ExponentialBuilder::default()
+            .with_jitter()
+            .with_min_delay(Duration::from_millis(2))
+            .with_max_delay(Duration::from_millis(500))
+            .with_factor(2.0)
+            .with_max_times(8);
+
+        let pool = run_with_retries!(
+            &backoff_policy,
+            PgPoolOptions::default().connect(&config.postgres_connection_string),
+            "postgres_tx_ingress_gate_connect"
+        )?;
+
+        run_with_retries!(
+            &backoff_policy,
+            sqlx::migrate!("src/preferred/db/postgres/migrations").run(&pool),
+            "postgres_tx_ingress_gate_migrate"
+        )?;
+
+        Ok(Self {
+            pool,
+            backoff_policy,
+        })
+    }
+
+    pub(crate) async fn status(&self) -> Result<TxIngressStatus> {
+        let row = run_with_retries!(
+            &self.backoff_policy,
+            self.status_inner(),
+            "postgres_tx_ingress_gate_status"
+        )?;
+        row.try_into()
+    }
+
+    pub(crate) async fn set_status(&self, status: SetTxIngressStatus) -> Result<TxIngressStatus> {
+        let status = status.clone();
+        let row = run_with_retries!(
+            &self.backoff_policy,
+            self.set_status_inner(status.clone()),
+            "postgres_tx_ingress_gate_set_status"
+        )?;
+        row.try_into()
+    }
+
+    async fn status_inner(&self) -> Result<TxIngressGateRow> {
+        self.ensure_default_row().await?;
+        let row = sqlx::query_as::<Postgres, TxIngressGateRow>(
+            "SELECT enabled, reason, updated_by, updated_at, generation
+             FROM tx_ingress_gate
+             WHERE id = TRUE",
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    async fn set_status_inner(&self, status: SetTxIngressStatus) -> Result<TxIngressGateRow> {
+        let row = sqlx::query_as::<Postgres, TxIngressGateRow>(
+            "INSERT INTO tx_ingress_gate (id, enabled, reason, updated_by, generation)
+             VALUES (TRUE, $1, $2, $3, 1)
+             ON CONFLICT (id) DO UPDATE
+             SET enabled = EXCLUDED.enabled,
+                 reason = EXCLUDED.reason,
+                 updated_by = EXCLUDED.updated_by,
+                 updated_at = NOW(),
+                 generation = tx_ingress_gate.generation + 1
+             RETURNING enabled, reason, updated_by, updated_at, generation",
+        )
+        .bind(status.enabled)
+        .bind(status.reason)
+        .bind(status.updated_by)
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
+    async fn ensure_default_row(&self) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO tx_ingress_gate (id, enabled, reason, updated_by, generation)
+             VALUES (TRUE, TRUE, NULL, NULL, 0)
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
     }
 }
 

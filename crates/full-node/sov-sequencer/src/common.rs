@@ -136,6 +136,72 @@ pub(crate) type SequencerEventStream<Rt> = Pin<
     >,
 >;
 
+/// Current transaction ingress status for the sequencer.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TxIngressStatus {
+    /// Whether new transactions are accepted.
+    pub enabled: bool,
+    /// Optional operator-provided reason for the current state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Optional operator identity or automation name that last updated the state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<String>,
+    /// Optional timestamp for the last update.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Monotonically increasing update generation.
+    pub generation: u64,
+}
+
+impl Default for TxIngressStatus {
+    fn default() -> Self {
+        Self::enabled()
+    }
+}
+
+impl TxIngressStatus {
+    /// Returns the default enabled ingress status.
+    pub fn enabled() -> Self {
+        Self {
+            enabled: true,
+            reason: None,
+            updated_by: None,
+            updated_at: None,
+            generation: 0,
+        }
+    }
+}
+
+/// Request body for changing transaction ingress status.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SetTxIngressStatus {
+    /// Whether new transactions should be accepted.
+    pub enabled: bool,
+    /// Optional operator-provided reason for this change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Optional operator identity or automation name performing this change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<String>,
+}
+
+/// Returns a 503 error for transaction submissions while ingress is disabled.
+pub fn tx_ingress_disabled(status: TxIngressStatus) -> ErrorObject {
+    ErrorObject {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        message: "Transaction ingress is disabled".to_string(),
+        details: json_obj!({
+            "error": "tx_ingress_disabled",
+            "enabled": status.enabled,
+            "reason": status.reason,
+            "updated_by": status.updated_by,
+            "updated_at": status.updated_at,
+            "generation": status.generation,
+        }),
+    }
+}
+
 /// The [`Sequencer`] trait is responsible for accepting transactions and
 /// assembling them into batches.
 #[async_trait]
@@ -187,6 +253,19 @@ pub trait Sequencer: Clone + Send + Sync + 'static {
 
     /// Checks whether the batch builder is ready to accept transactions.
     async fn is_ready(&self) -> Result<(), SequencerNotReadyDetails>;
+
+    /// Returns whether the sequencer is accepting new transaction submissions.
+    async fn tx_ingress_status(&self) -> anyhow::Result<TxIngressStatus> {
+        Ok(TxIngressStatus::enabled())
+    }
+
+    /// Sets whether the sequencer is accepting new transaction submissions.
+    async fn set_tx_ingress_status(
+        &self,
+        _status: SetTxIngressStatus,
+    ) -> anyhow::Result<TxIngressStatus> {
+        anyhow::bail!("This sequencer does not support transaction ingress control")
+    }
 
     /// Queries a transaction's status.
     async fn tx_status(
